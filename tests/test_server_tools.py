@@ -194,7 +194,7 @@ def test_port_overview_stops_after_failed_command(
     import os
 
     from netmiko_mcp_linksys.connection import SEQUENCE_SKIPPED
-    from netmiko_mcp_linksys.connection import ConnectionError as SwitchConnectionError
+    from netmiko_mcp_linksys.connection import SwitchConnectionError
     from netmiko_mcp_linksys.server import PORT_OVERVIEW_COMMANDS
 
     password = os.environ["SWITCH_PASSWORD"]

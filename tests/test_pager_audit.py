@@ -20,9 +20,7 @@ from netmiko_mcp_linksys.connection import (
     run_show,
     send_paged,
 )
-from netmiko_mcp_linksys.connection import (
-    ConnectionError as SwitchConnectionError,
-)
+from netmiko_mcp_linksys.connection import SwitchConnectionError
 from netmiko_mcp_linksys.validation import ValidationError
 
 

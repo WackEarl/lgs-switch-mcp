@@ -115,9 +115,7 @@ def test_run_config_rejects_device_error(monkeypatch: pytest.MonkeyPatch) -> Non
     conn = MagicMock()
     conn.send_config_set.return_value = "% Invalid input detected"
     with patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=conn):
-        from netmiko_mcp_linksys.connection import (
-            ConnectionError as SwitchConnectionError,
-        )
+        from netmiko_mcp_linksys.connection import SwitchConnectionError
 
         with pytest.raises(SwitchConnectionError, match="rejected"):
             run_config_and_readback(build_poe_commands("0/1", True), READBACK_POE.format(port="0/1"))
@@ -166,7 +164,7 @@ def test_run_save_sends_only_save(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_password_redacted_from_connection_error() -> None:
-    from netmiko_mcp_linksys.connection import ConnectionError as SwitchConnectionError
+    from netmiko_mcp_linksys.connection import SwitchConnectionError
 
     with patch(
         "netmiko_mcp_linksys.connection.ConnectHandler",

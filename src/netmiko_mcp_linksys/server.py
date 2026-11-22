@@ -23,6 +23,7 @@ from netmiko_mcp_linksys.connection import (
     READBACK_DESCRIPTION,
     READBACK_INTERFACE,
     READBACK_POE,
+    SwitchConnectionError,
     _send_config,
     build_admin_state_commands,
     build_description_commands,
@@ -36,9 +37,6 @@ from netmiko_mcp_linksys.connection import (
     run_show_sequence,
     send_paged,
     session_log_path,
-)
-from netmiko_mcp_linksys.connection import (
-    ConnectionError as SwitchConnectionError,
 )
 from netmiko_mcp_linksys.snmp_cli import (
     CLI_SOURCE,

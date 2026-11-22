@@ -1,8 +1,12 @@
-"""SSH session handling, pager handling, and CLI sequence builders.
+"""SSH session handling, pager handling, and CLI sequence runners.
 
 No connection is opened at import or process start. Each tool call opens one
 session (port_overview included), holds a process-wide lock for the duration,
 and disconnects after.
+
+Parser helpers live in ``parser``, command builders in ``commands``, and
+``SwitchConnectionError`` in ``errors``. This module remains the session
+layer and the public import path.
 """
 
 from __future__ import annotations
@@ -19,7 +23,23 @@ from typing import Any
 
 from netmiko import ConnectHandler
 
-from netmiko_mcp_linksys.output import strip_controls as _strip_controls
+from netmiko_mcp_linksys.commands import (
+    READBACK_DESCRIPTION,
+    READBACK_INTERFACE,
+    READBACK_POE,
+    build_admin_state_commands,
+    build_description_commands,
+    build_poe_commands,
+)
+from netmiko_mcp_linksys.errors import SwitchConnectionError, wrap_transport_error
+from netmiko_mcp_linksys.parser import (
+    MAX_PAGES,
+    PAGE_BREAK,
+    PAGER_RE,
+    clean_output,
+    prompt_regex,
+    visible_tail,
+)
 from netmiko_mcp_linksys.snmp_cli import (
     redact_community_listing,
     redact_community_name_fields,
@@ -30,11 +50,10 @@ from netmiko_mcp_linksys.validation import (
     redact_secrets,
 )
 
-_LOCK = threading.Lock()
+# Backward-compatible alias; new code should use SwitchConnectionError.
+ConnectionError = SwitchConnectionError
 
-READBACK_INTERFACE = "show interfaces gigabitethernet {port}"
-READBACK_POE = "show power inline gigabitethernet {port}"
-READBACK_DESCRIPTION = "show interfaces description"
+_LOCK = threading.Lock()
 
 DEFAULT_READ_TIMEOUT = 60.0
 MAX_READ_TIMEOUT = 600.0
@@ -44,23 +63,6 @@ MAX_READ_TIMEOUT = 600.0
 # privileged exec, which is what the 0.1.0 live test hit). The result is not
 # trusted: the pager loop below handles paging either way.
 PAGING_OFF_CONFIG = ("set cli pagination off",)
-
-# Pager prompts seen on ISS / Cisco-SMB style CLIs, e.g. "--More--",
-# "-- More --", "--More-- (45%)", "More: <space>,  Quit: q ...",
-# "<--- More --->", "Press any key to continue (Q to quit)".
-PAGER_RE = re.compile(
-    r"(?:"
-    r"-{2,}\s*\(?\s*more\s*\)?\s*-{2,}(?:\s*\(\d{1,3}%\))?"
-    r"|<-+\s*more\s*-+>"
-    r"|more:\s*<space>(?:[^\r\n]*?<return>)?"
-    r"|press any key to continue(?:\s*\([^()\r\n]{0,40}\))?"
-    r")",
-    re.IGNORECASE,
-)
-# Marks where a pager prompt was cut; blank lines right after it are erase
-# leftovers (netmiko turns the pager's "\r    \r" into newlines).
-PAGE_BREAK = "\ue000"
-MAX_PAGES = 2000
 
 # Y/N confirmation at the end of the last visible line, e.g. "(y/n)",
 # "[Y/N]:", "(yes/no)?". The LGS328PC save prompt text is NOT live-confirmed
@@ -73,10 +75,6 @@ SAVE_CONFIRM_RE = re.compile(
 SAVE_CONFIRM_ANSWER = "y"
 
 _warned: set[str] = set()
-
-
-class ConnectionError(RuntimeError):
-    """Switch connection or CLI execution failed. Message is already redacted."""
 
 
 def warn(message: str, *, once_key: str | None = None) -> None:
@@ -313,10 +311,10 @@ def session(*, enable_session_log: bool = True) -> Iterator[Any]:
             yield conn
         except ValidationError:
             raise
-        except ConnectionError:
+        except SwitchConnectionError:
             raise
         except Exception as exc:
-            raise ConnectionError(redact_secrets(str(exc))) from None
+            raise wrap_transport_error(exc) from None
         finally:
             if conn is not None:
                 try:
@@ -324,64 +322,6 @@ def session(*, enable_session_log: bool = True) -> Iterator[Any]:
                 except Exception:
                     pass
             redact_session_log_file()
-
-
-def _prompt_regex(conn: Any) -> re.Pattern[str]:
-    base = getattr(conn, "base_prompt", None)
-    if isinstance(base, str) and base.strip():
-        return re.compile(r"^\s*" + re.escape(base.strip()) + r"[^\r\n#>]*[#>]\s*$")
-    return re.compile(r"^\s*[\w.\-]+[^\r\n#>]*[#>]\s*$")
-
-
-def _visible_tail(raw: str) -> str:
-    """Last unterminated line as the terminal would show it."""
-    text = _strip_controls(raw).replace(PAGE_BREAK, "")
-    line = text.rsplit("\n", 1)[-1]
-    if "\r" in line:
-        segments = [seg for seg in line.split("\r") if seg.strip()]
-        line = segments[-1] if segments else ""
-    return line
-
-
-def clean_output(raw: str, command: str, prompt_re: re.Pattern[str]) -> str:
-    """Strip ANSI, control characters, pager prompts and their erase leftovers,
-    the command echo, and the prompt.
-
-    Blank lines directly before or after a page break are dropped
-    (pager erase leftovers, including trailing blanks at the end of a
-    page); blank lines elsewhere in the device output are kept.
-    """
-    text = _strip_controls(raw)
-    text = PAGER_RE.sub("", text)
-    text = text.replace("\r\n", "\n")
-    lines: list[str] = []
-    after_break = False
-    for line in text.split("\n"):
-        if PAGE_BREAK in line:
-            line = line.replace(PAGE_BREAK, "")
-            after_break = True
-            while lines and not lines[-1].strip():
-                lines.pop()
-        if "\r" in line:
-            segments = [seg for seg in line.split("\r") if seg.strip()]
-            line = segments[-1] if segments else ""
-        line = line.rstrip()
-        if after_break:
-            if not line.strip():
-                continue
-            after_break = False
-        lines.append(line)
-    while lines and not lines[0].strip():
-        lines.pop(0)
-    if lines and command.strip() and command.strip() in lines[0]:
-        lines.pop(0)
-    while lines and not lines[-1].strip():
-        lines.pop()
-    if lines and prompt_re.search(lines[-1]):
-        lines.pop()
-    while lines and not lines[-1].strip():
-        lines.pop()
-    return "\n".join(lines)
 
 
 def send_paged(
@@ -400,10 +340,10 @@ def send_paged(
 
     ``confirm=(pattern, answer)`` answers one confirmation prompt (last
     visible line matches ``pattern``) with ``answer``. A second
-    confirmation prompt is not answered and raises ConnectionError.
+    confirmation prompt is not answered and raises SwitchConnectionError.
     """
     limit = read_timeout() if timeout is None else timeout
-    prompt_re = _prompt_regex(conn)
+    prompt_re = prompt_regex(conn)
     try:
         conn.clear_buffer()
     except Exception:
@@ -419,11 +359,11 @@ def send_paged(
         if chunk:
             buffer += chunk
             deadline = time.monotonic() + limit
-            tail = _visible_tail(buffer[scan_from:])
+            tail = visible_tail(buffer[scan_from:])
             if PAGER_RE.search(tail):
                 pages += 1
                 if pages > MAX_PAGES:
-                    raise ConnectionError(f"Gave up after {MAX_PAGES} pager pages for {command!r}.")
+                    raise SwitchConnectionError(f"Gave up after {MAX_PAGES} pager pages for {command!r}.")
                 # Drop the pager line itself; PAGER_RE in clean_output is only
                 # a fallback for prompts that are echoed elsewhere.
                 cut = buffer.rfind("\n", scan_from)
@@ -435,7 +375,7 @@ def send_paged(
             if confirm is not None and confirm[0].search(tail):
                 confirms += 1
                 if confirms > 1:
-                    raise ConnectionError(
+                    raise SwitchConnectionError(
                         f"Unexpected second confirmation prompt after {command!r}; "
                         f"not answered (last line: {redact_secrets(tail[-80:])!r})."
                     )
@@ -448,12 +388,12 @@ def send_paged(
             if _is_snmp_sensitive_show(command):
                 # Fail closed: do not echo a possibly secret last line
                 # (foreign community, or unknown user-key layout).
-                raise ConnectionError(
+                raise SwitchConnectionError(
                     f"No prompt after {command!r} ({limit:g}s without new output, "
                     f"pages: {pages})."
                 )
-            last = _visible_tail(buffer)[-80:]
-            raise ConnectionError(
+            last = visible_tail(buffer)[-80:]
+            raise SwitchConnectionError(
                 f"No prompt after {command!r} ({limit:g}s without new output, "
                 f"pages: {pages}, last line: {redact_show_output(command, last)!r})."
             )
@@ -470,7 +410,7 @@ def run_show_sequence(commands: list[str]) -> list[tuple[str, str | None, str | 
     Returns ``(command, output, error)`` per command; exactly one of output
     and error is set. After the first failing command the remaining ones are
     not sent (the channel state is unknown) and get ``SEQUENCE_SKIPPED``.
-    Connect failures raise ``ConnectionError`` / ``ValidationError`` as
+    Connect failures raise ``SwitchConnectionError`` / ``ValidationError`` as
     ``run_show`` does. Callers must pass only filtered show commands.
     """
     results: list[tuple[str, str | None, str | None]] = []
@@ -485,7 +425,7 @@ def run_show_sequence(commands: list[str]) -> list[tuple[str, str | None, str | 
                 continue
             try:
                 results.append((command, _send_show(conn, command), None))
-            except ConnectionError as exc:
+            except SwitchConnectionError as exc:
                 failed = True
                 results.append((command, None, redact_secrets(str(exc))))
     return results
@@ -493,42 +433,13 @@ def run_show_sequence(commands: list[str]) -> list[tuple[str, str | None, str | 
 
 def _send_show(conn: Any, command: str) -> str:
     """send_paged_redacted (pager, secret and community redaction) with every
-    failure turned into a redacted ConnectionError."""
+    failure turned into a redacted SwitchConnectionError."""
     try:
         return send_paged_redacted(conn, command)
-    except ConnectionError:
+    except SwitchConnectionError:
         raise
     except Exception as exc:  # noqa: BLE001 - converted, redacted, re-raised (as run_show)
-        raise ConnectionError(redact_secrets(str(exc))) from None
-
-
-def build_admin_state_commands(port: str, enabled: bool) -> list[str]:
-    return [
-        f"interface gigabitethernet {port}",
-        "no shutdown" if enabled else "shutdown",
-    ]
-
-
-def build_poe_commands(port: str, enabled: bool) -> list[str]:
-    return [
-        f"interface gigabitethernet {port}",
-        "power inline enable" if enabled else "power inline disable",
-    ]
-
-
-def build_description_commands(port: str, text: str | None) -> list[str]:
-    """Always quote the text: the LGS CLI takes only one word unquoted.
-
-    validate_description() forbids quotes in the text, so quoting is safe.
-    """
-    if text is None:
-        inner = "no description"
-    else:
-        inner = f'description "{text}"'
-    return [
-        f"interface gigabitethernet {port}",
-        inner,
-    ]
+        raise wrap_transport_error(exc) from None
 
 
 def send_paged_redacted(conn: Any, command: str) -> str:
@@ -575,24 +486,24 @@ def _send_config(
         if _commands_include_snmp_community(commands):
             # Never return or log str(exc): netmiko cmd_verify timeouts
             # embed repr(re.escape(command)), which bypasses exact redaction.
-            raise ConnectionError(
+            raise SwitchConnectionError(
                 "Device rejected the configuration sequence "
                 f"({type(exc).__name__}). The exception text is omitted "
                 "because the sequence may include a community string."
             ) from None
-        raise ConnectionError(redact_secrets(str(exc))) from None
+        raise wrap_transport_error(exc) from None
     text = output if isinstance(output, str) else str(output)
     if config_output_is_error(text, commands=commands):
         if _commands_include_snmp_community(commands):
             # Never return or audit device text: wrap, ANSI erase, or a
             # mid-line prompt redraw can split a community token so span
             # and exact redaction miss fragments.
-            raise ConnectionError(
+            raise SwitchConnectionError(
                 "Device rejected the configuration sequence. "
                 "The device output is omitted because the sequence may "
                 "include a community string."
             )
-        raise ConnectionError(
+        raise SwitchConnectionError(
             "Device rejected the configuration sequence:\n" + redact_secrets(text)
         )
     return redact_secrets(text)
@@ -610,9 +521,12 @@ def run_config_and_readback(commands: list[str], readback: str) -> str:
         try:
             state_text = send_paged(conn, readback)
         except Exception as exc:
-            raise ConnectionError(
-                "Configuration was sent, but read-back failed: "
-                + redact_secrets(str(exc))
+            raise wrap_transport_error(
+                exc,
+                message=(
+                    "Configuration was sent, but read-back failed: "
+                    + redact_secrets(str(exc))
+                ),
             ) from None
         return (
             "Configuration sent.\n"
@@ -634,8 +548,8 @@ def run_config_and_readbacks(
         for readback in readbacks:
             try:
                 state_text = send_paged_redacted(conn, readback)
-            except ConnectionError as exc:
-                raise ConnectionError(
+            except SwitchConnectionError as exc:
+                raise SwitchConnectionError(
                     "Configuration was sent, but read-back failed: "
                     + redact_secrets(str(exc))
                 ) from None
@@ -659,13 +573,60 @@ def run_save() -> str:
         try:
             text = send_paged(conn, "save", confirm=(SAVE_CONFIRM_RE, SAVE_CONFIRM_ANSWER))
         except Exception as exc:
-            # ConnectionError messages are already redacted; redact again
+            # SwitchConnectionError messages are already redacted; redact again
             # for anything else (idempotent).
-            raise ConnectionError(
-                f"save did not complete: {redact_secrets(str(exc))} Whether "
-                "startup-config was written is unknown; check it before "
-                "saving again."
+            raise wrap_transport_error(
+                exc,
+                message=(
+                    f"save did not complete: {redact_secrets(str(exc))} Whether "
+                    "startup-config was written is unknown; check it before "
+                    "saving again."
+                ),
             ) from None
     if config_output_is_error(text, commands=["save"]):
-        raise ConnectionError("save failed:\n" + redact_secrets(text))
+        raise SwitchConnectionError("save failed:\n" + redact_secrets(text))
     return redact_secrets(text)
+
+
+__all__ = [
+    "CONFIG_ERROR_PATTERN",
+    "ConnectionError",
+    "DEFAULT_READ_TIMEOUT",
+    "MAX_PAGES",
+    "MAX_READ_TIMEOUT",
+    "PAGE_BREAK",
+    "PAGER_RE",
+    "PAGING_OFF_CONFIG",
+    "READBACK_DESCRIPTION",
+    "READBACK_INTERFACE",
+    "READBACK_POE",
+    "SAVE_CONFIRM_ANSWER",
+    "SAVE_CONFIRM_RE",
+    "SEQUENCE_SKIPPED",
+    "SwitchConnectionError",
+    "build_admin_state_commands",
+    "build_description_commands",
+    "build_poe_commands",
+    "clean_output",
+    "connect_params",
+    "disable_paging_best_effort",
+    "paging_off_enabled",
+    "prepare_private_file",
+    "read_timeout",
+    "redact_session_log_file",
+    "redact_show_output",
+    "run_config_and_readback",
+    "run_config_and_readbacks",
+    "run_config_set",
+    "run_in_session",
+    "run_save",
+    "run_show",
+    "run_show_sequence",
+    "run_shows",
+    "send_paged",
+    "send_paged_redacted",
+    "session",
+    "session_log_path",
+    "warn",
+    "wrap_transport_error",
+]
