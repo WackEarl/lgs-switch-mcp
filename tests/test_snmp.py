@@ -9,7 +9,7 @@ import pytest
 from netmiko.exceptions import ConfigInvalidException
 
 from netmiko_mcp_linksys.connection import (
-    ConnectionError,
+    SwitchConnectionError,
     redact_session_log_file,
     redact_show_output,
 )
@@ -342,7 +342,7 @@ def test_redact_show_output_for_community_command(community_env: str) -> None:
 
 
 def test_redact_in_exception_message(community_env: str) -> None:
-    err = ConnectionError(
+    err = SwitchConnectionError(
         redact_secrets(f"Device rejected:\nsnmp community name {SECRET} security ifmib_sec")
     )
     assert SECRET not in str(err)
@@ -1176,7 +1176,7 @@ def test_cody_readback_exception_after_send_is_verification_failed(
         if command == READBACK_SNMP_VIEW and later.calls == 0:
             later.calls += 1
             return VIEW_SHOW_RESTRICTED
-        raise ConnectionError(f"timeout after sending {SECRET}")
+        raise SwitchConnectionError(f"timeout after sending {SECRET}")
 
     later.calls = 0  # type: ignore[attr-defined]
 
@@ -2504,7 +2504,7 @@ def test_send_config_passes_error_pattern_to_netmiko() -> None:
     assert "error_pattern" not in switch.kwargs[0]
     assert switch.kwargs[1]["error_pattern"] == "%"
     refused = FakeSwitch(refuse=lambda cmd: True)
-    with pytest.raises(ConnectionError):
+    with pytest.raises(SwitchConnectionError):
         _send_config(
             refused,
             ["snmp view a 1.3.6.1.2.1.2 included", "snmp view a 1.3.6.1.2.1.31 included"],
@@ -2894,7 +2894,7 @@ def test_send_paged_timeout_omits_last_line_for_sensitive_snmp_show(
     chan = _IdleTimeoutChannel(
         [[f"{command}\r\n", f"Community Name: {_FOREIGN_COMMUNITY}"]]
     )
-    with pytest.raises(ConnectionError) as excinfo:
+    with pytest.raises(SwitchConnectionError) as excinfo:
         send_paged(chan, command, timeout=0.05, poll_interval=0.01)
     msg = str(excinfo.value)
     assert f"No prompt after {command!r}" in msg
@@ -2912,7 +2912,7 @@ def test_send_paged_timeout_keeps_redacted_last_line_for_other_shows(
     chan = _IdleTimeoutChannel(
         [["show interfaces\r\n", f"Description: {SECRET} uplink"]]
     )
-    with pytest.raises(ConnectionError) as excinfo:
+    with pytest.raises(SwitchConnectionError) as excinfo:
         send_paged(chan, "show interfaces", timeout=0.05, poll_interval=0.01)
     msg = str(excinfo.value)
     assert "No prompt after 'show interfaces'" in msg

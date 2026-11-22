@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `connection.py` is split into `errors.py` (`SwitchConnectionError`),
+  `parser.py` (pager and output cleanup), and `commands.py` (CLI
+  sequence builders). The session/transport layer stays in
+  `connection.py`, which still re-exports the previous public names.
+  The old `ConnectionError` name remains as an alias. MCP tool names,
+  parameters, and return values are unchanged
+  ([#6](https://github.com/WackEarl/netmiko-mcp-linksys/issues/6)).
 - `port_overview` runs its four allow-listed show commands in a single SSH
   session (same process-wide lock, same command filter, no config sent)
   instead of opening one session per command. If a command fails inside

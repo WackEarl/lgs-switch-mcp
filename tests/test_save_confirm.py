@@ -17,9 +17,7 @@ from netmiko_mcp_linksys.connection import (
     run_save,
     send_paged,
 )
-from netmiko_mcp_linksys.connection import (
-    ConnectionError as SwitchConnectionError,
-)
+from netmiko_mcp_linksys.connection import SwitchConnectionError
 
 CONFIRM = (SAVE_CONFIRM_RE, SAVE_CONFIRM_ANSWER)
 
