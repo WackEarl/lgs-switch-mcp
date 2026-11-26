@@ -7,68 +7,138 @@ import pytest
 
 from netmiko_mcp_linksys.audit import write_audit
 from netmiko_mcp_linksys.server import (
-    poe_set,
     port_overview,
-    port_set_admin_state,
     port_set_description,
     save_config,
     show,
 )
+from netmiko_mcp_linksys.writetools import poe_disable, port_disable
+from tests.fakes import FakeSwitch, install
 
 
-def test_port_set_admin_state_rejects_protected(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_port_disable_rejects_protected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/24")
-    with patch("netmiko_mcp_linksys.server.run_config_and_readback") as run:
-        result = port_set_admin_state("0/24", False)
+    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
+        result = port_disable("0/24", dry_run=False)
     run.assert_not_called()
     assert result.startswith("Rejected:")
     assert "protected port" in result
 
 
-def test_poe_set_rejects_protected_and_non_poe(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_poe_disable_rejects_protected_and_non_poe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/8")
-    with patch("netmiko_mcp_linksys.server.run_config_and_readback") as run:
-        protected = poe_set("0/8", False)
-        uplink = poe_set("0/28", False)
+    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
+        protected = poe_disable("0/8", dry_run=False)
+        uplink = poe_disable("0/28", dry_run=False)
     run.assert_not_called()
     assert "protected port" in protected
     assert "PoE is only supported" in uplink
 
 
-def test_port_set_admin_state_calls_builder(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_port_disable_sends_builder_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/24")
-    with patch(
-        "netmiko_mcp_linksys.server.run_config_and_readback", return_value="done"
-    ) as run:
-        result = port_set_admin_state("0/2", False)
-    assert result == "done"
-    commands, readback = run.call_args.args
-    assert commands == ["interface gigabitethernet 0/2", "shutdown"]
-    assert "gigabitethernet 0/2" in readback
+    from netmiko_mcp_linksys.commands import READBACK_INTERFACE
+
+    readback = READBACK_INTERFACE.format(port="0/2")
+    switch = install(monkeypatch, FakeSwitch({readback: ["Gi0/2 up", "Gi0/2 down"]}))
+    result = json.loads(port_disable("0/2", dry_run=False))
+    assert switch.config_sets == [["interface gigabitethernet 0/2", "shutdown"]]
+    assert switch.config_kwargs[0]["error_pattern"] == "%"
+    assert result["before"][readback] == "Gi0/2 up"
+    assert result["after"][readback] == "Gi0/2 down"
+    assert "-Gi0/2 up" in result["diff"][readback]
+    assert "+Gi0/2 down" in result["diff"][readback]
 
 
 def test_description_rejects_special_chars() -> None:
-    with patch("netmiko_mcp_linksys.server.run_config_and_readback") as run:
-        result = port_set_description("0/1", "bad|text")
+    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
+        result = port_set_description("0/1", "bad|text", dry_run=False)
     run.assert_not_called()
     assert result.startswith("Rejected:")
 
 
-def test_description_none_clears() -> None:
-    with patch(
-        "netmiko_mcp_linksys.server.run_config_and_readback", return_value="cleared"
-    ) as run:
-        result = port_set_description("0/1", None)
-    assert result.startswith("cleared")
-    assert "could not verify (port row not found)" in result
-    commands, readback = run.call_args.args
-    assert commands == ["interface gigabitethernet 0/1", "no description"]
-    assert readback == "show interfaces description"
+def test_description_none_clears(monkeypatch: pytest.MonkeyPatch) -> None:
+    switch = install(monkeypatch, FakeSwitch({"show interfaces description": "cleared"}))
+    result = json.loads(port_set_description("0/1", None, dry_run=False))
+    assert "could not verify (port row not found)" in result["readback_note"]
+    assert switch.config_sets == [["interface gigabitethernet 0/1", "no description"]]
 
 
-def test_save_config_tool() -> None:
-    with patch("netmiko_mcp_linksys.server.run_save", return_value="saved"):
-        assert save_config() == "saved"
+def test_description_allowed_on_protected_and_caution_ports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/24")
+    monkeypatch.setenv("SWITCH_CAUTION_PORTS", "0/15")
+    switch = install(monkeypatch, FakeSwitch({"show interfaces description": "x"}))
+    for port in ("0/24", "0/15"):
+        assert json.loads(port_set_description(port, "Uplink", dry_run=False))["sent"]
+    assert len(switch.config_sets) == 2
+
+
+def test_description_dry_run_is_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    switch = install(monkeypatch, FakeSwitch({"show interfaces description": "x"}))
+    result = json.loads(port_set_description("0/1", "Desk"))
+    assert result["dry_run"] is True and result["sent"] is False
+    assert result["commands"] == ["interface gigabitethernet 0/1", 'description "Desk"']
+    assert switch.config_sets == []
+
+
+def test_save_config_dry_run_default_saves_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    switch = install(
+        monkeypatch,
+        FakeSwitch(
+            {
+                "show startup-config": "!\nsystem location A\nend\n",
+                "show running-config": "!\nsystem location B\nend\n",
+                "show system information": "Config Save Status : Not Saved\n",
+            }
+        ),
+    )
+    saved: list[object] = []
+    monkeypatch.setattr("netmiko_mcp_linksys.server.save_in_session", saved.append)
+    result = json.loads(save_config())
+    assert saved == []
+    assert result["sent"] is False
+    assert "-system location A" in result["diff_startup_to_running"]
+    assert "+system location B" in result["diff_startup_to_running"]
+    assert result["config_save_status"] == "Not Saved"
+    assert switch.config_sets == []
+
+
+def test_save_config_backs_up_startup_and_diffs(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SWITCH_PRE_WRITE_SNAPSHOT", "required")
+    install(
+        monkeypatch,
+        FakeSwitch(
+            {
+                "show startup-config": ["!\nsystem location A\nend\n", "!\nsystem location B\nend\n"],
+                "show running-config": "!\nsystem location B\nend\n",
+                "show system information": "Config Save Status : Saved\n",
+            }
+        ),
+    )
+    monkeypatch.setattr("netmiko_mcp_linksys.server.save_in_session", lambda _c: "Saved")
+    result = json.loads(save_config(dry_run=False))
+    backup = result["backup"]
+    assert backup["path"].endswith("_startup_pre-save.cfg")
+    assert (tmp_path / "backups").is_dir()
+    assert "system location A" in open(backup["path"], encoding="utf-8").read()
+    assert "+system location B" in result["diff_startup_old_to_new"]
+    assert result["config_save_status"] == "Saved"
+
+
+def test_save_config_refuses_without_backup_when_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SWITCH_PRE_WRITE_SNAPSHOT", "required")
+    install(monkeypatch, FakeSwitch({}))
+    saved: list[object] = []
+    monkeypatch.setattr("netmiko_mcp_linksys.server.save_in_session", saved.append)
+    result = save_config(dry_run=False)
+    assert result.startswith("Error: Backup of the current startup-config failed")
+    assert saved == []
 
 
 def test_show_missing_command_file(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -79,11 +149,13 @@ def test_show_missing_command_file(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_audit_log_written(audit_log, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/24")
-    port_set_admin_state("0/24", False)
+    port_disable("0/24", dry_run=False)
     lines = [json.loads(line) for line in audit_log.read_text(encoding="utf-8").splitlines()]
-    assert lines[-1]["tool"] == "port_set_admin_state"
+    assert lines[-1]["tool"] == "port_disable"
     assert lines[-1]["allowed"] is False
-    assert lines[-1]["params"] == {"port": "0/24", "enabled": False}
+    assert lines[-1]["params"] == {
+        "port": "0/24", "confirm_caution_port": False, "dry_run": False,
+    }
     assert "dummy-password-not-real" not in audit_log.read_text(encoding="utf-8")
     assert (audit_log.stat().st_mode & 0o777) == 0o600
 
@@ -95,8 +167,6 @@ def test_tools_registered() -> None:
     assert names == {
         "show",
         "port_overview",
-        "port_set_admin_state",
-        "poe_set",
         "port_set_description",
         "save_config",
         "snmp_view_create",
@@ -104,6 +174,33 @@ def test_tools_registered() -> None:
         "snmp_community_create",
         "snmp_community_remove",
         "snmp_user_remove",
+        # 0.3.0 read tools
+        "health_summary",
+        "port_status",
+        "port_counters",
+        "counters_delta",
+        "mac_table",
+        "lldp_neighbors",
+        "poe_status",
+        "config_read",
+        "config_backup",
+        "config_diff",
+        "audit_tail",
+        "show_help",
+        # 0.3.0 write tools (port_set_admin_state / poe_set were split)
+        "port_enable",
+        "port_disable",
+        "poe_enable",
+        "poe_disable",
+        "poe_cycle",
+        "port_security_set",
+        "storm_control_set",
+        "rate_limit_set",
+        "cable_diag",
+        "syslog_set",
+        "mgmt_services_set",
+        "clear_counters",
+        "system_identity_set",
     }
 
 
@@ -111,24 +208,25 @@ def test_disable_fails_closed_when_protected_ports_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("SWITCH_PROTECTED_PORTS", raising=False)
-    with patch("netmiko_mcp_linksys.server.run_config_and_readback") as run:
-        admin = port_set_admin_state("0/1", False)
-        poe = poe_set("0/1", False)
+    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
+        admin = port_disable("0/1", dry_run=False)
+        poe = poe_disable("0/1", dry_run=False)
     run.assert_not_called()
     assert admin.startswith("Rejected:")
     assert "fail-closed" in admin
     assert poe.startswith("Rejected:")
-    assert "fail-closed" in poe
-
 
 def test_enable_allowed_when_protected_ports_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SWITCH_PROTECTED_PORTS", raising=False)
-    with patch(
-        "netmiko_mcp_linksys.server.run_config_and_readback", return_value="on"
-    ) as run:
-        result = port_set_admin_state("0/1", True)
-    assert result == "on"
-    run.assert_called_once()
+    from netmiko_mcp_linksys.writetools import poe_enable, port_enable
+
+    switch = install(monkeypatch, FakeSwitch({}))
+    assert json.loads(port_enable("0/1", dry_run=False))["sent"] is True
+    assert json.loads(poe_enable("0/1", dry_run=False))["sent"] is True
+    assert switch.config_sets == [
+        ["interface gigabitethernet 0/1", "no shutdown"],
+        ["interface gigabitethernet 0/1", "power inline enable"],
+    ]
 
 
 def test_port_overview_is_read_only(reset_command_file: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -145,8 +243,8 @@ def test_port_overview_is_read_only(reset_command_file: None, monkeypatch: pytes
         patch(
             "netmiko_mcp_linksys.server.run_show_sequence", side_effect=fake_sequence
         ) as run_seq,
-        patch("netmiko_mcp_linksys.server.run_config_and_readback") as run_cfg,
-        patch("netmiko_mcp_linksys.server.run_save") as run_save,
+        patch("netmiko_mcp_linksys.writes.run_in_session") as run_cfg,
+        patch("netmiko_mcp_linksys.server.save_in_session") as run_save,
         patch("netmiko_mcp_linksys.server.run_config_set", create=True) as run_set,
     ):
         result = port_overview()

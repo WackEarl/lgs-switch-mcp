@@ -197,26 +197,44 @@ def test_audit_failure_is_non_fatal(
     assert "Read-only file system" in capsys.readouterr().err
 
 
+def _fake_save_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.fakes import FakeSwitch, install
+
+    switch = FakeSwitch(
+        {
+            "show startup-config": "!\nend\n",
+            "show running-config": "!\nend\n",
+            "show system information": "Config Save Status : Saved\n",
+        }
+    )
+    install(monkeypatch, switch)
+    monkeypatch.setattr("netmiko_mcp_linksys.server.save_in_session", lambda _c: "saved")
+
+
 def test_tool_result_carries_audit_warning(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys.server import port_set_admin_state, save_config
+    from netmiko_mcp_linksys.server import save_config
+    from netmiko_mcp_linksys.writetools import port_disable
 
     _readonly_audit(monkeypatch)
-    with patch("netmiko_mcp_linksys.server.run_save", return_value="saved"):
-        result = save_config()
-    assert result.startswith("saved")
+    _fake_save_session(monkeypatch)
+    result = save_config(dry_run=False)
+    assert '"device_output": "saved"' in result
     assert "audit_warning:" in result
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/24")
-    rejected = port_set_admin_state("0/24", False)
+    rejected = port_disable("0/24", dry_run=False)
     assert rejected.startswith("Rejected:")
     assert "audit_warning:" in rejected
 
 
-def test_audit_ok_has_no_warning(audit_log: Path) -> None:
+def test_audit_ok_has_no_warning(audit_log: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from netmiko_mcp_linksys.server import save_config
 
-    with patch("netmiko_mcp_linksys.server.run_save", return_value="saved"):
-        assert save_config() == "saved"
-    assert json.loads(audit_log.read_text().splitlines()[-1])["tool"] == "save_config"
+    _fake_save_session(monkeypatch)
+    result = save_config(dry_run=False)
+    assert "audit_warning" not in result
+    record = json.loads(audit_log.read_text().splitlines()[-1])
+    assert record["tool"] == "save_config"
+    assert record["params"] == {"dry_run": False}
 
 
 def test_startup_check_writable(audit_log: Path) -> None:
