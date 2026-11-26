@@ -13,6 +13,7 @@ import yaml
 from netmiko_mcp_linksys.audit import check_audit_path, write_audit
 from netmiko_mcp_linksys.connection import (
     PAGER_RE,
+    SwitchConnectionError,
     clean_output,
     connect_params,
     disable_paging_best_effort,
@@ -20,7 +21,6 @@ from netmiko_mcp_linksys.connection import (
     run_show,
     send_paged,
 )
-from netmiko_mcp_linksys.connection import SwitchConnectionError
 from netmiko_mcp_linksys.validation import ValidationError
 
 
@@ -203,7 +203,7 @@ def _fake_save_session(monkeypatch: pytest.MonkeyPatch) -> None:
     switch = FakeSwitch(
         {
             "show startup-config": "!\nend\n",
-            "show running-config": "!\nend\n",
+            "show current running-config": "!\nend\n",
             "show system information": "Config Save Status : Saved\n",
         }
     )

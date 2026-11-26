@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -64,15 +66,37 @@ def test_description_none_clears(monkeypatch: pytest.MonkeyPatch) -> None:
     assert switch.config_sets == [["interface gigabitethernet 0/1", "no description"]]
 
 
-def test_description_allowed_on_protected_and_caution_ports(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/24")
+def test_description_refused_on_protected_ports(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/10,0/24")
+    switch = install(monkeypatch, FakeSwitch({"show interfaces description": "x"}))
+    for port in ("0/10", "0/24"):
+        for dry_run in (True, False):
+            result = port_set_description(port, "Uplink", dry_run=dry_run)
+            assert result.startswith("Rejected: Refusing port_set_description on protected port")
+    assert switch.config_sets == [] and switch.sessions == 0
+
+
+def test_description_fail_closed_without_protected_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SWITCH_PROTECTED_PORTS", raising=False)
+    switch = install(monkeypatch, FakeSwitch({"show interfaces description": "x"}))
+    assert port_set_description("0/3", "Desk", dry_run=False).startswith("Rejected:")
+    assert switch.config_sets == []
+
+
+def test_description_caution_port_needs_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/10,0/24")
     monkeypatch.setenv("SWITCH_CAUTION_PORTS", "0/15")
     switch = install(monkeypatch, FakeSwitch({"show interfaces description": "x"}))
-    for port in ("0/24", "0/15"):
-        assert json.loads(port_set_description(port, "Uplink", dry_run=False))["sent"]
-    assert len(switch.config_sets) == 2
+    refused = port_set_description("0/15", "Zigbee", dry_run=False)
+    assert refused.startswith("Rejected: Port 0/15 is a caution port")
+    assert switch.config_sets == []
+    result = json.loads(
+        port_set_description("0/15", "Zigbee", confirm_caution_port=True, dry_run=False)
+    )
+    assert result["sent"] is True
+    assert any("caution port" in warning for warning in result["warnings"])
+    assert switch.config_sets == [["interface gigabitethernet 0/15", 'description "Zigbee"']]
+    assert port_set_description("0/3", "Desk", confirm_caution_port="yes").startswith("Rejected:")
 
 
 def test_description_dry_run_is_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,13 +107,19 @@ def test_description_dry_run_is_default(monkeypatch: pytest.MonkeyPatch) -> None
     assert switch.config_sets == []
 
 
+RUN_A = "!\nsystem location A\nend\n"
+RUN_B = "!\nsystem location B\nend\n"
+
+
 def test_save_config_dry_run_default_saves_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from netmiko_mcp_linksys import configstore
+
+    configstore.store_backup(RUN_A, "running", tag="pre-save")
     switch = install(
         monkeypatch,
         FakeSwitch(
             {
-                "show startup-config": "!\nsystem location A\nend\n",
-                "show running-config": "!\nsystem location B\nend\n",
+                "show current running-config": RUN_B,
                 "show system information": "Config Save Status : Not Saved\n",
             }
         ),
@@ -99,22 +129,39 @@ def test_save_config_dry_run_default_saves_nothing(monkeypatch: pytest.MonkeyPat
     result = json.loads(save_config())
     assert saved == []
     assert result["sent"] is False
-    assert "-system location A" in result["diff_startup_to_running"]
-    assert "+system location B" in result["diff_startup_to_running"]
+    assert result["startup_config"] == "not readable on this device"
+    assert "-system location A" in result["diff_last_save_to_running"]
+    assert "+system location B" in result["diff_last_save_to_running"]
     assert result["config_save_status"] == "Not Saved"
     assert switch.config_sets == []
+    assert "show startup-config" not in switch.shows
 
 
-def test_save_config_backs_up_startup_and_diffs(
+def test_save_config_dry_run_without_earlier_copy(monkeypatch: pytest.MonkeyPatch) -> None:
+    install(
+        monkeypatch,
+        FakeSwitch({"show current running-config": RUN_B,
+                    "show system information": "Config Save Status : Saved\n"}),
+    )
+    result = json.loads(save_config())
+    assert "diff_last_save_to_running" not in result
+    assert any("No copy from an earlier save_config" in w for w in result["warnings"])
+
+
+def test_save_config_backs_up_running_and_diffs_previous_save(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from netmiko_mcp_linksys import configstore
+
     monkeypatch.setenv("SWITCH_PRE_WRITE_SNAPSHOT", "required")
-    install(
+    configstore.store_backup(RUN_A, "running", tag="pre-save")
+    # A later pre-write snapshot must not become the save baseline.
+    configstore.store_backup("!\nsystem location X\nend\n", "running", tag="pre-port_enable")
+    switch = install(
         monkeypatch,
         FakeSwitch(
             {
-                "show startup-config": ["!\nsystem location A\nend\n", "!\nsystem location B\nend\n"],
-                "show running-config": "!\nsystem location B\nend\n",
+                "show current running-config": RUN_B,
                 "show system information": "Config Save Status : Saved\n",
             }
         ),
@@ -122,11 +169,16 @@ def test_save_config_backs_up_startup_and_diffs(
     monkeypatch.setattr("netmiko_mcp_linksys.server.save_in_session", lambda _c: "Saved")
     result = json.loads(save_config(dry_run=False))
     backup = result["backup"]
-    assert backup["path"].endswith("_startup_pre-save.cfg")
+    assert backup["path"].endswith("_running_pre-save.cfg") or re.search(
+        r"_running_pre-save-\d+\.cfg$", backup["path"]
+    )
     assert (tmp_path / "backups").is_dir()
-    assert "system location A" in open(backup["path"], encoding="utf-8").read()
-    assert "+system location B" in result["diff_startup_old_to_new"]
+    assert "system location B" in Path(backup["path"]).read_text(encoding="utf-8")
+    assert "-system location A" in result["diff_previous_save_to_saved"]
+    assert "+system location B" in result["diff_previous_save_to_saved"]
+    assert "location X" not in result["diff_previous_save_to_saved"]
     assert result["config_save_status"] == "Saved"
+    assert "show startup-config" not in switch.shows
 
 
 def test_save_config_refuses_without_backup_when_required(
@@ -137,8 +189,19 @@ def test_save_config_refuses_without_backup_when_required(
     saved: list[object] = []
     monkeypatch.setattr("netmiko_mcp_linksys.server.save_in_session", saved.append)
     result = save_config(dry_run=False)
-    assert result.startswith("Error: Backup of the current startup-config failed")
+    assert result.startswith("Error: Backup of the running-config to be saved failed")
     assert saved == []
+
+
+def test_save_config_best_effort_saves_without_backup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SWITCH_PRE_WRITE_SNAPSHOT", "best-effort")
+    install(monkeypatch, FakeSwitch({"show system information": "Config Save Status : Saved\n"}))
+    saved: list[object] = []
+    monkeypatch.setattr(
+        "netmiko_mcp_linksys.server.save_in_session", lambda c: saved.append(c) or "Saved"
+    )
+    result = json.loads(save_config(dry_run=False))
+    assert saved and "failed" in result["backup"]
 
 
 def test_show_missing_command_file(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -291,8 +354,7 @@ def test_port_overview_stops_after_failed_command(
 ) -> None:
     import os
 
-    from netmiko_mcp_linksys.connection import SEQUENCE_SKIPPED
-    from netmiko_mcp_linksys.connection import SwitchConnectionError
+    from netmiko_mcp_linksys.connection import SEQUENCE_SKIPPED, SwitchConnectionError
     from netmiko_mcp_linksys.server import PORT_OVERVIEW_COMMANDS
 
     password = os.environ["SWITCH_PASSWORD"]

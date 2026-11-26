@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import builtins
-import socket
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,7 +16,8 @@ from netmiko_mcp_linksys.connection import (
     run_show,
 )
 from netmiko_mcp_linksys.errors import SwitchConnectionError as CanonicalError
-from netmiko_mcp_linksys.parser import PAGE_BREAK, clean_output as parse_clean_output
+from netmiko_mcp_linksys.parser import PAGE_BREAK
+from netmiko_mcp_linksys.parser import clean_output as parse_clean_output
 from netmiko_mcp_linksys.validation import ValidationError
 
 
@@ -37,7 +37,7 @@ def test_public_names_still_importable_from_connection() -> None:
 @pytest.mark.parametrize(
     "exc",
     [
-        socket.timeout("timed out talking to dummy-password-not-real"),
+        TimeoutError("timed out talking to dummy-password-not-real"),
         OSError("connection refused dummy-password-not-real"),
         NetmikoTimeoutException("Timed-out reading channel dummy-password-not-real"),
     ],
@@ -47,9 +47,8 @@ def test_run_show_wraps_transport_errors(exc: BaseException) -> None:
     with patch(
         "netmiko_mcp_linksys.connection.ConnectHandler",
         side_effect=exc,
-    ):
-        with pytest.raises(SwitchConnectionError) as excinfo:
-            run_show("show system information")
+    ), pytest.raises(SwitchConnectionError) as excinfo:
+        run_show("show system information")
     assert "dummy-password-not-real" not in str(excinfo.value)
     assert excinfo.value.__cause__ is None
 
@@ -69,9 +68,9 @@ def test_session_reraises_switch_connection_error() -> None:
             "netmiko_mcp_linksys.connection.send_paged_redacted",
             side_effect=err,
         ),
+        pytest.raises(SwitchConnectionError, match="already redacted") as excinfo,
     ):
-        with pytest.raises(SwitchConnectionError, match="already redacted") as excinfo:
-            run_show("show system information")
+        run_show("show system information")
     assert excinfo.value is err
     assert excinfo.value.__cause__ is None
 

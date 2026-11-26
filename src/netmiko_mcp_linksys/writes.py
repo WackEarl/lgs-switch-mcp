@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from netmiko_mcp_linksys import configstore
-from netmiko_mcp_linksys.commands import CONFIG_SHOW
+from netmiko_mcp_linksys.commands import CONFIG_SHOW, STARTUP_UNAVAILABLE
 from netmiko_mcp_linksys.connection import (
     CONFIG_ERROR_PATTERN,
     SwitchConnectionError,
@@ -88,12 +88,20 @@ class WritePlan:
         return [command for stage in self.stages for command in stage.commands]
 
 
-def read_config(conn: Any, source: str = "running") -> str:
-    """Read running/startup-config on an open session, masked.
+class ConfigUnavailableError(SwitchConnectionError):
+    """The device has no CLI command for this config source (startup)."""
 
-    Raises SwitchConnectionError when the device rejects the command (the
-    LGS manual does not list ``show running-config``; live check)."""
-    command = CONFIG_SHOW[configstore.validate_source(source)]
+
+def read_config(conn: Any, source: str = "running") -> str:
+    """Read the running-config on an open session, masked.
+
+    ``startup`` raises ConfigUnavailableError without sending anything (the
+    LGS CLI has no show command for it). Raises SwitchConnectionError when
+    the device rejects ``show current running-config``."""
+    source = configstore.validate_source(source)
+    if source not in CONFIG_SHOW:
+        raise ConfigUnavailableError(STARTUP_UNAVAILABLE)
+    command = CONFIG_SHOW[source]
     try:
         raw = send_paged(conn, command)
     except SwitchConnectionError:
@@ -285,6 +293,7 @@ def execute(plan: WritePlan, *, dry_run: bool) -> str:
 __all__ = [
     "NOT_SAVED",
     "SNAPSHOT_MODES",
+    "ConfigUnavailableError",
     "Stage",
     "WritePlan",
     "execute",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -120,7 +121,7 @@ def test_dry_run_is_default_and_sends_nothing(
 ) -> None:
     monkeypatch.setenv("SWITCH_SYSLOG_ALLOWED", "192.0.2.5")
     monkeypatch.setenv("SWITCH_PRE_WRITE_SNAPSHOT", "required")
-    switch = install(monkeypatch, FakeSwitch({"show running-config": RUNNING_CONFIG}))
+    switch = install(monkeypatch, FakeSwitch({"show current running-config": RUNNING_CONFIG}))
     result = json.loads(getattr(w, tool)(**kwargs))
     assert result["dry_run"] is True
     assert result["sent"] is False
@@ -152,12 +153,12 @@ def test_snapshot_best_effort_writes_and_reports(monkeypatch: pytest.MonkeyPatch
 
 def test_snapshot_is_masked_file(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWITCH_PRE_WRITE_SNAPSHOT", "required")
-    install(monkeypatch, FakeSwitch({"show running-config": RUNNING_CONFIG}))
+    install(monkeypatch, FakeSwitch({"show current running-config": RUNNING_CONFIG}))
     result = json.loads(w.storm_control_set("0/3", "broadcast", 2000, dry_run=False))
     path = result["snapshot"]["path"]
     assert path.startswith(str(tmp_path / "backups"))
     assert path.endswith("_running_pre-storm_control_set.cfg")
-    body = open(path, encoding="utf-8").read()
+    body = Path(path).read_text(encoding="utf-8")
     for secret in SECRETS_IN_RUNNING:
         assert secret not in body
         assert secret not in json.dumps(result)
@@ -173,7 +174,7 @@ def test_device_error_percent_is_reported(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_storm_control_reads_interface_block(monkeypatch: pytest.MonkeyPatch) -> None:
     after = RUNNING_CONFIG.replace("storm-control broadcast level 1000", "storm-control broadcast level 2000")
-    install(monkeypatch, FakeSwitch({"show running-config": [RUNNING_CONFIG, after]}))
+    install(monkeypatch, FakeSwitch({"show current running-config": [RUNNING_CONFIG, after]}))
     result = json.loads(w.storm_control_set("0/3", "broadcast", 2000, dry_run=False))
     diff = result["diff"]["interface config"]
     assert "-storm-control broadcast level 1000" in diff

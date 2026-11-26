@@ -257,21 +257,83 @@ def parse_power_detail(text: str) -> dict[str, Any]:
     }
 
 
+POE_MAX_PORT = 24
+_BARE_PORT_RE = re.compile(r"^\d{1,2}$")
+
+
+def normalize_poe_port(token: str) -> str | None:
+    """Like normalize_port, plus the bare numbers ``1``..``24`` that
+    ``show power inline`` prints in its Port column (-> ``0/N``)."""
+    text = token.strip().rstrip(",")
+    if _BARE_PORT_RE.match(text) and 1 <= int(text) <= POE_MAX_PORT:
+        return f"0/{int(text)}"
+    return normalize_port(text)
+
+
+def _poe_row_port(row: dict[str, str]) -> str | None:
+    for key, value in row.items():
+        if key in {"port", "interface", "intf"} or key.startswith("port"):
+            return normalize_poe_port(value.split()[0]) if value.split() else None
+    first = next(iter(row.values()), "")
+    return normalize_poe_port(first.split()[0]) if first.split() else None
+
+
+def _poe_tables(text: str) -> list[Table]:
+    """Tables of ``show power inline`` whose rows start with a port token
+    (``Gi0/7``, ``0/7`` or a bare ``7``)."""
+    found = [
+        table for table in parse_tables(text)
+        if any("port" in key for key in table.keys)
+    ]
+    if found:
+        return found
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if "port" not in header_key(line) or not re.search(r"(?i)admin|oper|power", line):
+            continue
+        starts = _column_starts_from_header(line)
+        headers = _slice(line, starts)
+        table = Table(headers=headers, keys=[header_key(cell) for cell in headers])
+        for row in lines[index + 1 :]:
+            if not row.strip():
+                if table.rows:
+                    break
+                continue
+            if normalize_poe_port(row.split()[0]) is None:
+                if table.rows:
+                    break
+                continue
+            table.rows.append(dict(zip(table.keys, _row_cells(row, starts), strict=False)))
+        if table.rows:
+            return [table]
+    return []
+
+
 def parse_power_inline(text: str) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """``show power inline``: per port admin/status/W/class/priority.
+
+    Live layout (LGS328PC): the Port column holds ``1``..``24`` and there
+    are multi-word columns such as ``Power Limit Type`` and ``Auto Class``;
+    their words must not be mistaken for the Power, Class or Type columns."""
     ports: dict[str, dict[str, Any]] = {}
-    tables = parse_header_table(text, ("power",)) or parse_header_table(text, ("port",))
-    for table in tables:
+    for table in _poe_tables(text):
         for row in table.rows:
-            port = row_port(row)
+            port = _poe_row_port(row)
             if port is None:
                 continue
-            power = column(row, "power(w)", "powerw", "power", "consum", exclude=("limit", "max", "prior"))
+            power = column(
+                row, "power(w)", "powerw", "outputpower", "power", "consum",
+                exclude=("limit", "max", "prior", "type", "class", "budget"),
+            )
             ports[port] = {
                 "admin": column(row, "admin"),
                 "status": column(row, "oper", "status", "state", exclude=("admin",)),
                 "power_w": to_number(power),
-                "class": column(row, "class"),
-                "device": column(row, "device", "type"),
+                "max_power_w": to_number(column(row, "maxpower", "powerlimit", exclude=("type",))),
+                "class": column(row, "class", exclude=("auto", "limit")),
+                "auto_class": column(row, "autoclass"),
+                "limit_type": column(row, "limittype", "powerlimittype"),
+                "device": column(row, "device", "pdtype", exclude=("limit",)),
                 "priority": column(row, "prior"),
             }
     warnings = [] if ports else ["show power inline: no port rows recognised"]
@@ -371,13 +433,85 @@ def expand_port_list(text: str) -> list[str]:
     return ports
 
 
-def parse_vlan_membership(text: str) -> dict[str, list[dict[str, Any]]]:
-    """Best effort: {port: [{vlan, tagged}]} from ``show vlan``.
+_VLAN_KV_ID_RE = re.compile(r"(?i)^\s*vlan\s*id\s*:\s*(\d{1,4})\s*$")
+_VLAN_KV_FIELD_RE = re.compile(r"^\s*([A-Za-z][A-Za-z ]{0,40}?)\s*:\s*(.*)$")
+_PO_LIST_RE = re.compile(r"\b(?:po|port-channel)\s*(\d+)\b", re.IGNORECASE)
 
-    A line starting with a VLAN id opens a block; port lists on that line
-    and the following indented lines belong to it. ``tagged`` is True or
-    False when the line says Tagged/Untagged, else None.
+
+def _port_list(text: str) -> list[str]:
+    ports = expand_port_list(text)
+    ports.extend(f"po{int(number)}" for number in _PO_LIST_RE.findall(text))
+    return ports
+
+
+def _parse_vlan_key_values(text: str) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+    """Live LGS layout: one block per VLAN with ``Vlan ID : 1``,
+    ``Member Ports : Gi0/1, …``, ``Untagged Ports : …``; long port lists
+    continue on indented lines without a label."""
+    membership: dict[str, list[dict[str, Any]]] = {}
+    warnings: list[str] = []
+    blocks: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    field_name: str | None = None
+    for line in text.splitlines():
+        match = _VLAN_KV_ID_RE.match(line)
+        if match:
+            current = {"vlan": int(match.group(1)), "member": "", "untagged": "", "forbidden": ""}
+            blocks.append(current)
+            field_name = None
+            continue
+        if current is None:
+            continue
+        if not line.strip() or _SEPARATOR_RE.match(line):
+            field_name = None
+            continue
+        field = _VLAN_KV_FIELD_RE.match(line)
+        if field:
+            label = header_key(field.group(1))
+            field_name = None
+            if label.startswith("member"):
+                field_name = "member"
+            elif label.startswith("untagged"):
+                field_name = "untagged"
+            elif label.startswith("forbidden"):
+                field_name = "forbidden"
+            elif label.startswith("tagged"):
+                field_name = "tagged"
+                current.setdefault("tagged", "")
+            if field_name:
+                current[field_name] += " " + field.group(2)
+            continue
+        if field_name and line[:1].isspace():
+            current[field_name] += " " + line
+    for block in blocks:
+        vlan = block["vlan"]
+        if not 1 <= vlan <= 4094:
+            warnings.append(f"show vlan: VLAN id {vlan} out of range, skipped")
+            continue
+        members = _port_list(block["member"]) + _port_list(block.get("tagged", ""))
+        untagged = set(_port_list(block["untagged"]))
+        if not members and block["member"].strip() and block["member"].strip().lower() != "none":
+            warnings.append(f"show vlan: member ports of VLAN {vlan} not recognised")
+        for port in dict.fromkeys(members + sorted(untagged - set(members))):
+            entries = membership.setdefault(port, [])
+            item = {"vlan": vlan, "tagged": port not in untagged}
+            if item not in entries:
+                entries.append(item)
+    if not blocks:
+        warnings.append("show vlan: no 'Vlan ID' blocks recognised")
+    return membership, warnings
+
+
+def parse_vlan_membership(text: str) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+    """Best effort: ({port: [{vlan, tagged}]}, warnings) from ``show vlan``.
+
+    The LGS prints key/value blocks (``Vlan ID : 1`` / ``Member Ports :``);
+    a table layout (a line starting with a VLAN id opens a block, port
+    lists on that line and following indented lines belong to it) is still
+    understood. ``tagged`` is True/False when known, else None.
     """
+    if any(_VLAN_KV_ID_RE.match(line) for line in text.splitlines()):
+        return _parse_vlan_key_values(text)
     membership: dict[str, list[dict[str, Any]]] = {}
     current: int | None = None
     for line in text.splitlines():
@@ -386,10 +520,9 @@ def parse_vlan_membership(text: str) -> dict[str, list[dict[str, Any]]]:
             current = int(match.group(1))
         elif not line.strip() or _SEPARATOR_RE.match(line):
             continue
-        elif line[:1].strip():
+        elif line[:1].strip() and not _VLAN_PORT_RE.search(line):
             # Unindented non-VLAN line: a new section (e.g. a header).
-            if not _VLAN_PORT_RE.search(line):
-                current = None
+            current = None
         if current is None:
             continue
         lower = line.lower()
@@ -402,7 +535,10 @@ def parse_vlan_membership(text: str) -> dict[str, list[dict[str, Any]]]:
             entries = membership.setdefault(port, [])
             if not any(item["vlan"] == current and item["tagged"] == tagged for item in entries):
                 entries.append({"vlan": current, "tagged": tagged})
-    return membership
+    warnings = [] if membership or not text.strip() else [
+        "show vlan: no VLAN membership recognised"
+    ]
+    return membership, warnings
 
 
 def parse_mac_table(text: str) -> tuple[list[dict[str, Any]], int | None, list[str]]:
@@ -479,6 +615,22 @@ def parse_lldp_neighbors(text: str) -> tuple[list[dict[str, Any]], list[str]]:
     return neighbors, warnings
 
 
+def parse_environment(text: str) -> dict[str, Any]:
+    """Best effort for show device temperature / system fan / system
+    utilization (layouts not recorded yet): ``Label : value`` pairs, else
+    the table rows, else the first non-empty lines."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if lines and lines[0].startswith("%"):
+        return {"unavailable": lines[0]}
+    values = parse_key_values(text)
+    if values:
+        return {"fields": values}
+    rows = [table.rows for table in parse_tables(text) if table.rows]
+    if rows:
+        return {"rows": [row for table_rows in rows for row in table_rows][:50]}
+    return {"lines": lines[:20]}
+
+
 _LOG_LINE_RE = re.compile(
     r"^\s*(?:<\d+>|\w{3}\s+\d{1,2}\s+\d{1,2}:\d{2}|\d{4}[-/]\d{2}[-/]\d{2}|\d{1,2}:\d{2}:\d{2})"
 )
@@ -521,7 +673,9 @@ __all__ = [
     "interface_config_block",
     "link_state",
     "normalize_mac",
+    "normalize_poe_port",
     "normalize_port",
+    "parse_environment",
     "parse_header_table",
     "parse_interface_counters",
     "parse_interface_descriptions",

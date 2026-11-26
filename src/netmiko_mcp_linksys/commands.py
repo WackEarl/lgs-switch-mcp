@@ -47,7 +47,16 @@ READBACK_HTTP = "show http server status"
 READBACK_HTTPS = "show ip http secure server status"
 READBACK_TELNET = "show telnet server"
 READBACK_COUNTERS = "show interfaces counters"
-CONFIG_SHOW = {"running": "show running-config", "startup": "show startup-config"}
+# Live check 0.3.0 (LGS328PC FW 1.01.02.02): the running-config is only
+# readable as "show current running-config" ("show current ?" offers nothing
+# else); there is no show command for the startup-config at all.
+CONFIG_SHOW = {"running": "show current running-config"}
+STARTUP_UNAVAILABLE = (
+    "startup-config cannot be read on this device: the LGS CLI has no show "
+    "command for it (only 'show current running-config'). save_config keeps "
+    "a masked copy of the running-config it saves (tag pre-save); "
+    "config_diff compares against that copy."
+)
 CABLE_DIAG = "show interface cable-diag gigabitethernet {port}"
 
 
