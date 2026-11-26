@@ -1419,8 +1419,11 @@ def test_cody_session_log_redacts_community_name_by_label(
     assert foreign not in body
     assert SECRET not in body
     assert "Community Name: [REDACTED]" in body
-    assert "Community Index: old" in body
-    assert "Security Name: old_sec" in body
+    # 0.3.0: index and security name values are masked by the line rules too.
+    assert "Community Index: [REDACTED]" in body
+    assert "Security Name: [REDACTED]" in body
+    assert "old_sec" not in body
+    assert "LGS# show snmp community" in body
 
 
 def test_cody_no_terminal_width_helper() -> None:
@@ -2797,13 +2800,15 @@ def test_redact_show_output_masks_abbreviated_community_listings(
     "command",
     ["show running-config", "show snmp group", "show system information"],
 )
-def test_redact_show_output_does_not_listing_redact_other_shows(
+def test_redact_show_output_masks_community_fields_in_other_shows(
     command: str, community_env: str
 ) -> None:
+    """0.3.0: fail-closed line rules mask foreign community names everywhere."""
     out = redact_show_output(command, _FOREIGN_COMMUNITY_SHOW)
     assert not _secret_in(out, SECRET)
-    assert _FOREIGN_COMMUNITY in out
-    assert "Community Name: public" in out
+    assert _FOREIGN_COMMUNITY not in out
+    assert "Community Name: [REDACTED]" in out
+    assert "Storage Type: volatile" in out
 
 
 @pytest.mark.parametrize(
@@ -2879,7 +2884,8 @@ def test_run_show_sequence_disables_session_log_for_abbreviations(
         unsensitive = connection.run_show_sequence(["show system information"])
         assert "session_log" in captured[-1]
         assert unsensitive[0][2] is None
-        assert _FOREIGN_COMMUNITY in (unsensitive[0][1] or "")
+        assert _FOREIGN_COMMUNITY not in (unsensitive[0][1] or "")
+        assert "Community Name: [REDACTED]" in (unsensitive[0][1] or "")
 
 
 @pytest.mark.parametrize(
