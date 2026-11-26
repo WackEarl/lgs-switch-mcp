@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-26
+
+Not live-tested yet; see "Live test 0.3.0" in the README.
+
+### Changed (breaking)
+
+- `port_set_admin_state` and `poe_set` are replaced by `port_enable`,
+  `port_disable`, `poe_enable` and `poe_disable` (same CLI commands), so
+  the hub can lock the disabling direction per tool.
+- Every write tool defaults to `dry_run=true` and sends nothing unless
+  called with `dry_run=false`: the new tools, `port_set_description`,
+  `save_config` and the five SNMP tools. Write results are JSON.
+- `save_config(dry_run=false)` backs up the current startup-config
+  (masked) before `save`, returns the diff of the old and new
+  startup-config and the `Config Save Status`. The dry run returns the
+  diff startup → running.
+- Device text is redacted fail-closed line by line (new `redaction`
+  module) in tool output, config error text, config backups and the
+  session log: foreign SNMP communities and security names, SNMPv3
+  auth/priv keys, `username … password …`, RADIUS/TACACS keys, PEM blocks
+  and key blobs. Unrecognised lines with `password|key|secret|community|
+  auth|priv` become `[REDACTED-LINE]`. `show radius server` keeps only
+  `Label : value` lines. Shows that were shown unmasked before (e.g. a
+  foreign community in `show system information`) are now masked.
+
+### Added
+
+- Write pipeline (`writes`): current state, masked running-config
+  snapshot (`SWITCH_PRE_WRITE_SNAPSHOT=required|best-effort|off`), send
+  with `%` as error pattern, read-back and before/after diff, all in one
+  session.
+- Read tools with JSON output: `health_summary`, `port_status`,
+  `port_counters`, `counters_delta` (baseline in `SWITCH_STATE_DIR`),
+  `mac_table`, `lldp_neighbors`, `poe_status`.
+- Config tools: `config_read`, `config_backup` (files in
+  `SWITCH_BACKUP_DIR`, SHA256, diff to the previous backup),
+  `config_diff` (running vs startup, Config Save Status).
+- `audit_tail(n=50)` and `show_help(prefix)` (types `show <prefix> ?`,
+  clears the line with Ctrl-U, executes nothing).
+- Write tools: `port_security_set`, `storm_control_set`,
+  `rate_limit_set`, `poe_cycle` (PoE back on in `finally`, retry in a new
+  session), `cable_diag`, `syslog_set` (targets only from
+  `SWITCH_SYSLOG_ALLOWED`), `mgmt_services_set` (no SSH change, no Telnet
+  on; HTTP off only after HTTPS reads back Enabled), `clear_counters`
+  (resets the `counters_delta` baseline), `system_identity_set`.
+- Protected ports are refused by every new port write tool in every
+  direction (fail-closed). New `SWITCH_CAUTION_PORTS`: port writes there
+  need `confirm_caution_port=true`, which is audited.
+- `examples/commands.yml`: read-only entries for logging-server,
+  security-suite, access-lists, port-isolation, monitor, DNS, clock
+  properties, dot1x, `show radius server`, RMON, QoS, IGMP/MLD snooping,
+  voice VLAN, IPv6 interface/route, `show cli`, `show history`, HTTPS
+  status. Running/startup config and cable diagnostics stay denied for
+  `show`.
+- README: unlock-class proposal, new environment variables, live-test
+  checklist for 0.3.0.
+
+### Not included
+
+- Port mirroring (no guaranteed automatic removal), management ACL,
+  TFTP export, environment/SFP values (need `show_help` findings first),
+  speed/duplex. See the README for the reasons.
+
 ### Fixed
 
 - Idle-timeout errors from `send_paged` now run the last output line through
@@ -79,10 +142,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the state before (else `ROLLBACK NOT VERIFIED`). There are no per-port
   exclusions: the protected ports (`SWITCH_PROTECTED_PORTS`, production
   0/10 and 0/24) are refused by the tools only, not at SNMP level
-  (Roland, 2026-11-13). Anyone with the write community can switch them
+  (owner decision, 2026-11-13). Anyone with the write community can switch them
   directly over SNMP; the README says so. 0/15 (EoC converter feeding the
   Zigbee router) is documented as "do not turn PoE off", not locked.
-- The `show snmp viewtree` parser reads the layout from Redy's read-only
+- The `show snmp viewtree` parser reads the layout from the network admin's read-only
   check (`Subtree OID  : 1` / `Subtree Mask : 1` / `View Type    :
   Included`) and starts a new entry at every `View Name` line, so blank
   line separated blocks work too. Masks are read per RFC 3415: a full
@@ -112,7 +175,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Live test
 
-Redy's 0.2.0 live check on an LGS328PC (firmware 1.01.02.02, commit
+The network admin's 0.2.0 live check on an LGS328PC (firmware 1.01.02.02, commit
 177dc84, 2026-11-13):
 
 - Device error lines start with `%` (example: `% Invalid input detected
@@ -137,7 +200,7 @@ Not live-verified in that check:
 
 ### Security
 
-- Removed again before release (Roland, 2026-11-13): the view-level
+- Removed again before release (owner decision, 2026-11-13): the view-level
   exclusions of the protected ports, `SWITCH_SNMP_PROTECTED_IFINDEXES`,
   `SWITCH_SNMP_PROTECTED_POE_INDEXES` and the two-stage
   exclusion/include apply with its staged rollback. They needed live
@@ -154,14 +217,14 @@ Not live-verified in that check:
   whole arcs, and unknown formats or partial (wildcard) masks are refused,
   also in the read-view precheck. Before, other OID spellings could hide
   a write view from `snmp_view_create`, so the whole POWER-ETHERNET-MIB
-  could be added to it (Cody). The read-view precheck now refuses any
+  could be added to it (found in review). The read-view precheck now refuses any
   view with excluded entries or writable columns.
 - SNMP view names are compared exactly (case-sensitive) in all view
   checks (`view_is_restricted`, `view_is_write_safe`, the read-back
   checks, and the PoE/write-view prechecks). A view name that differs
   from an existing view only in letter case is refused (fail-closed),
   because it is not live-confirmed whether ISS treats view names
-  case-sensitively (found by Cody). `snmp_view_create` now reads `show snmp viewtree` before
+  case-sensitively (found in review). `snmp_view_create` now reads `show snmp viewtree` before
   sending and refuses if it cannot be parsed.
 
 - SNMP community rejection paths return only a generic message (no device
@@ -177,7 +240,7 @@ Not live-verified in that check:
 
 ## [0.1.3] - 2026-11-13
 
-Fixes from Cody's architecture review and the remaining nits from the
+Fixes from the architecture review and the remaining nits from the
 0.1.2 live retest, tracked in [#2](https://github.com/WackEarl/netmiko-mcp-linksys/issues/2)
 and [#3](https://github.com/WackEarl/netmiko-mcp-linksys/issues/3).
 

@@ -18,6 +18,18 @@ os.environ.setdefault("SWITCH_PASSWORD", "dummy-password-not-real")
 os.environ.setdefault("SWITCH_DEVICE_TYPE", "cisco_s300")
 os.environ.setdefault("SWITCH_KNOWN_HOSTS", str(EXAMPLES / "known_hosts"))
 os.environ.setdefault("SWITCH_PROTECTED_PORTS", "0/24,0/25")
+# Pre-0.3.0 tests use fake sessions without a running-config; tests of the
+# snapshot set it explicitly.
+os.environ.setdefault("SWITCH_PRE_WRITE_SNAPSHOT", "off")
+
+
+@pytest.fixture(autouse=True)
+def _private_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep backups and state of every test in its own tmp directory."""
+    monkeypatch.setenv("SWITCH_BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("SWITCH_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("SWITCH_CAUTION_PORTS", raising=False)
+    monkeypatch.delenv("SWITCH_SYSLOG_ALLOWED", raising=False)
 
 
 @pytest.fixture

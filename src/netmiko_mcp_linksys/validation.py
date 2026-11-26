@@ -331,6 +331,134 @@ def reject_if_protected(port: str, *, disabling: bool, action: str) -> None:
         )
 
 
+def reject_protected_port(port: str, *, action: str) -> None:
+    """Refuse every write on a protected port (the 0.3.0 write tools).
+
+    Unlike reject_if_protected, this applies to every direction (also
+    "enable"/"set"), and an unset, empty, or invalid list refuses the
+    action for every port (fail-closed).
+    """
+    protected = parse_protected_ports()
+    if port in protected:
+        raise ValidationError(
+            f"Refusing {action} on protected port {port}. "
+            "Protected ports come from SWITCH_PROTECTED_PORTS."
+        )
+
+
+def parse_caution_ports(raw: str | None = None) -> set[str]:
+    """Return SWITCH_CAUTION_PORTS. Unset or empty means no caution ports.
+
+    An invalid entry raises, so the caller refuses the write (fail-closed).
+    """
+    if raw is None:
+        raw = os.environ.get("SWITCH_CAUTION_PORTS") or ""
+    ports = {part.strip() for part in raw.split(",") if part.strip()}
+    invalid = sorted(port for port in ports if not PORT_RE.fullmatch(port))
+    if invalid:
+        raise ValidationError(
+            "SWITCH_CAUTION_PORTS contains invalid port(s): "
+            + ", ".join(invalid)
+            + ". Refusing port writes until it is fixed (fail-closed)."
+        )
+    return ports
+
+
+def require_caution_confirmation(port: str, *, confirmed: bool, action: str) -> bool:
+    """Refuse a write on a caution port unless confirm_caution_port=True.
+
+    Returns True when the port is a caution port, so the caller can note it.
+    """
+    if port not in parse_caution_ports():
+        return False
+    if confirmed is not True:
+        raise ValidationError(
+            f"Port {port} is a caution port (SWITCH_CAUTION_PORTS). "
+            f"Repeat {action} with confirm_caution_port=true if this is intended."
+        )
+    return True
+
+
+SYSLOG_FACILITIES = tuple(f"local{n}" for n in range(8))
+# ISS keywords from the manual ("notification", not "notifications").
+SYSLOG_SEVERITIES = (
+    "emergencies",
+    "alerts",
+    "critical",
+    "errors",
+    "warnings",
+    "notification",
+    "informational",
+    "debugging",
+)
+STORM_TYPES = ("broadcast", "unknown-multicast", "dlf")
+RATE_DIRECTIONS = ("input", "output")
+IDENTITY_RE = re.compile(r"^[A-Za-z0-9 ._-]{1,64}$")
+_IPV4_RE = re.compile(r"^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$")
+
+
+def validate_int(value: object, *, name: str, low: int, high: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        raise ValidationError(f"{name} must be an integer from {low} to {high}.")
+    return value
+
+
+def validate_choice(value: object, *, name: str, choices: Sequence[str]) -> str:
+    if not isinstance(value, str) or value not in choices:
+        raise ValidationError(f"{name} must be one of: {', '.join(choices)}.")
+    return value
+
+
+def syslog_allowlist() -> list[str]:
+    """IPv4 targets from SWITCH_SYSLOG_ALLOWED; unset/empty/invalid raises."""
+    raw = (os.environ.get("SWITCH_SYSLOG_ALLOWED") or "").strip()
+    entries = [part.strip() for part in raw.split(",") if part.strip()]
+    if not entries:
+        raise ValidationError(
+            "SWITCH_SYSLOG_ALLOWED is not set. syslog_set only accepts targets "
+            "from that comma-separated IPv4 allowlist (fail-closed)."
+        )
+    invalid = [entry for entry in entries if not _IPV4_RE.fullmatch(entry)]
+    if invalid:
+        raise ValidationError(
+            "SWITCH_SYSLOG_ALLOWED contains invalid IPv4 address(es): "
+            + ", ".join(invalid)
+            + ". Refusing syslog_set (fail-closed)."
+        )
+    return entries
+
+
+def validate_syslog_target(server_ip: str) -> str:
+    allowed = syslog_allowlist()
+    if not isinstance(server_ip, str) or server_ip not in allowed:
+        raise ValidationError(
+            f"Syslog target {server_ip!r} is not in SWITCH_SYSLOG_ALLOWED "
+            f"({', '.join(allowed)})."
+        )
+    return server_ip
+
+
+SWITCH_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
+
+
+def validate_switch_name(name: str) -> str:
+    """Switch name becomes the CLI prompt: no spaces, 1..32 of [A-Za-z0-9._-]."""
+    if not isinstance(name, str) or not SWITCH_NAME_RE.fullmatch(name):
+        raise ValidationError(
+            "Invalid switch name. Use 1..32 characters from [A-Za-z0-9._-] (no spaces)."
+        )
+    return name
+
+
+def validate_identity_text(text: str, *, name: str) -> str:
+    if not isinstance(text, str) or not IDENTITY_RE.fullmatch(text) or text != text.strip():
+        raise ValidationError(
+            f"Invalid {name}. Use 1..64 characters from [A-Za-z0-9 ._-], "
+            "without leading or trailing spaces."
+        )
+    return text
+
+
 # Hostname, optional (config…) mode, then # or >. Used to drop a leading
 # prompt so echoed commands and prompt-only lines can be skipped.
 _PROMPT_PREFIX_RE = re.compile(r"^[\w.\-]+(?:\([^)\r\n]*\))?[#>]\s*")

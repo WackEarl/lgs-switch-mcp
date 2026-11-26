@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from unittest.mock import patch
 
 import pytest
@@ -60,27 +62,26 @@ def test_clear_description_is_unquoted() -> None:
 
 @pytest.mark.parametrize("text", ['Repeater "EG"', "Repeater 'EG'", 'a"b'])
 def test_quotes_in_input_still_rejected(text: str) -> None:
-    with patch("netmiko_mcp_linksys.server.run_config_and_readback") as run:
+    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
         result = port_set_description("0/7", text)
     run.assert_not_called()
     assert result.startswith("Rejected:")
 
 
-def test_port_set_description_reads_back_interfaces_description() -> None:
-    readback = (
-        "Configuration sent.\n--- show interfaces description ---\n"
-        + ASSUMED_INTERFACES_DESCRIPTION
-        + "\n"
+def test_port_set_description_reads_back_interfaces_description(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.fakes import FakeSwitch, install
+
+    switch = install(
+        monkeypatch,
+        FakeSwitch({READBACK_DESCRIPTION: ["before", ASSUMED_INTERFACES_DESCRIPTION]}),
     )
-    with patch(
-        "netmiko_mcp_linksys.server.run_config_and_readback", return_value=readback
-    ) as run:
-        result = port_set_description("0/7", "Repeater EG")
-    commands, command = run.call_args.args
-    assert commands[1] == 'description "Repeater EG"'
-    assert command == READBACK_DESCRIPTION == "show interfaces description"
-    assert result.startswith("Configuration sent.")
-    assert "description found in read-back (without quotes)" in result
+    result = json.loads(port_set_description("0/7", "Repeater EG", dry_run=False))
+    assert switch.config_sets == [["interface gigabitethernet 0/7", 'description "Repeater EG"']]
+    assert READBACK_DESCRIPTION == "show interfaces description"
+    assert result["sent"] is True
+    assert "description found in read-back (without quotes)" in result["readback_note"]
 
 
 def test_parse_interface_description_from_assumed_table() -> None:

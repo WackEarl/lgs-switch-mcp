@@ -40,6 +40,7 @@ from netmiko_mcp_linksys.parser import (
     prompt_regex,
     visible_tail,
 )
+from netmiko_mcp_linksys.redaction import redact_device_text, redact_sensitive_lines
 from netmiko_mcp_linksys.snmp_cli import (
     redact_community_listing,
     redact_community_name_fields,
@@ -184,11 +185,27 @@ def _is_snmp_sensitive_show(command: str) -> bool:
     return _snmp_sensitive_kind(command) is not None
 
 
+def _is_strict_show(command: str) -> bool:
+    """``show radius …`` (any abbreviation of show) uses strict line redaction."""
+    words = _normalized_command_words(command)
+    return (
+        len(words) >= 2
+        and _is_command_prefix(words[0], "show", min_len=_MIN_SHOW_PREFIX)
+        and _is_command_prefix(words[1], "radius", min_len=3)
+    )
+
+
 def redact_show_output(command: str, text: str) -> str:
-    """Redact secrets in exec output. Community listings are fully masked."""
+    """Redact secrets in exec output.
+
+    Community listings are fully masked; every output then goes through the
+    fail-closed line rules (``redaction``), strict for ``show radius``.
+    """
     if _snmp_sensitive_kind(command) == "community":
-        return redact_community_listing(text)
-    return redact_secrets(text)
+        text = redact_community_listing(text)
+    else:
+        text = redact_secrets(text)
+    return redact_sensitive_lines(text, strict=_is_strict_show(command))
 
 
 def redact_session_log_file() -> None:
@@ -209,7 +226,9 @@ def redact_session_log_file() -> None:
         # show snmp community table and must not be replaced wholesale.
         # Label-regex still masks Community Name fields (including
         # communities that are not the configured secret).
-        redacted = redact_community_name_fields(redact_secrets(original))
+        redacted = redact_sensitive_lines(
+            redact_community_name_fields(redact_secrets(original))
+        )
         if redacted == original:
             return
         path.write_text(redacted, encoding="utf-8")
@@ -504,9 +523,9 @@ def _send_config(
                 "include a community string."
             )
         raise SwitchConnectionError(
-            "Device rejected the configuration sequence:\n" + redact_secrets(text)
+            "Device rejected the configuration sequence:\n" + redact_device_text(text)
         )
-    return redact_secrets(text)
+    return redact_device_text(text)
 
 
 def run_config_set(commands: list[str]) -> str:
@@ -567,25 +586,92 @@ def run_in_session(
         return callback(conn)
 
 
-def run_save() -> str:
-    """Send 'save'; answer one Y/N confirmation with 'y' (prompt not live-confirmed)."""
-    with session() as conn:
-        try:
-            text = send_paged(conn, "save", confirm=(SAVE_CONFIRM_RE, SAVE_CONFIRM_ANSWER))
-        except Exception as exc:
-            # SwitchConnectionError messages are already redacted; redact again
-            # for anything else (idempotent).
-            raise wrap_transport_error(
-                exc,
-                message=(
-                    f"save did not complete: {redact_secrets(str(exc))} Whether "
-                    "startup-config was written is unknown; check it before "
-                    "saving again."
-                ),
-            ) from None
+def save_in_session(conn: Any) -> str:
+    """Send 'save' on an open session; answer one Y/N confirmation with 'y'
+    (prompt not live-confirmed)."""
+    try:
+        text = send_paged(conn, "save", confirm=(SAVE_CONFIRM_RE, SAVE_CONFIRM_ANSWER))
+    except Exception as exc:
+        # SwitchConnectionError messages are already redacted; redact again
+        # for anything else (idempotent).
+        raise wrap_transport_error(
+            exc,
+            message=(
+                f"save did not complete: {redact_secrets(str(exc))} Whether "
+                "startup-config was written is unknown; check it before "
+                "saving again."
+            ),
+        ) from None
     if config_output_is_error(text, commands=["save"]):
-        raise SwitchConnectionError("save failed:\n" + redact_secrets(text))
-    return redact_secrets(text)
+        raise SwitchConnectionError("save failed:\n" + redact_device_text(text))
+    return redact_device_text(text)
+
+
+def run_save() -> str:
+    """Send 'save' in its own session (see save_in_session)."""
+    with session() as conn:
+        return save_in_session(conn)
+
+
+# Ctrl-U clears the typed line on ISS/Cisco-style CLIs.
+CLEAR_LINE = "\x15"
+HELP_IDLE_SECONDS = 2.0
+
+
+def send_help(conn: Any, text: str, *, idle: float = HELP_IDLE_SECONDS) -> str:
+    """Type ``text`` followed by ``?`` (no Enter), read the help listing,
+    then clear the line with Ctrl-U and return to a clean prompt.
+
+    Nothing is executed: the line is never submitted. The listing is read
+    until ``idle`` seconds pass without new output (help prompts redraw
+    the typed line, so the normal prompt check does not apply). Pager
+    prompts are answered with a space. The caller must redact the result.
+    """
+    prompt_re = prompt_regex(conn)
+    try:
+        conn.clear_buffer()
+    except Exception:
+        pass
+    conn.write_channel(f"{text} ?")
+    buffer = ""
+    pages = 0
+    hard_deadline = time.monotonic() + read_timeout()
+    last_output = time.monotonic()
+    while True:
+        chunk = conn.read_channel()
+        now = time.monotonic()
+        if chunk:
+            buffer += chunk
+            last_output = now
+            if PAGER_RE.search(visible_tail(buffer)):
+                pages += 1
+                if pages > MAX_PAGES:
+                    break
+                conn.write_channel(" ")
+            continue
+        if now - last_output >= idle or now > hard_deadline:
+            break
+        time.sleep(0.1)
+    # Clear the redrawn partial line, then get a fresh prompt.
+    conn.write_channel(CLEAR_LINE)
+    conn.write_channel(getattr(conn, "RETURN", "\n"))
+    settle = time.monotonic() + read_timeout()
+    tail = ""
+    while time.monotonic() < settle:
+        chunk = conn.read_channel()
+        if chunk:
+            tail += chunk
+            if prompt_re.search(visible_tail(tail)):
+                break
+        else:
+            time.sleep(0.1)
+    text_out = clean_output(buffer, f"{text} ?", prompt_re)
+    lines = [
+        line
+        for line in text_out.splitlines()
+        if not (prompt_re.search(line) or line.strip().endswith(text.strip()))
+    ]
+    return "\n".join(lines).strip("\n")
 
 
 __all__ = [
@@ -620,6 +706,8 @@ __all__ = [
     "run_config_set",
     "run_in_session",
     "run_save",
+    "save_in_session",
+    "send_help",
     "run_show",
     "run_show_sequence",
     "run_shows",

@@ -176,8 +176,14 @@ def test_save_config_tool_reports_unknown_state(monkeypatch: pytest.MonkeyPatch)
     chan = ScriptedChannel([["save\r\n", "Are you sure? "]])
     monkeypatch.setenv("SWITCH_PAGING_OFF", "0")
     monkeypatch.setenv("SWITCH_READ_TIMEOUT", "1")
-    with patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=chan):
-        result = save_config()
+    def no_config(_conn, source):
+        raise SwitchConnectionError(f"show {source}-config is not available")
+
+    with (
+        patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=chan),
+        patch("netmiko_mcp_linksys.server.read_config", side_effect=no_config),
+    ):
+        result = save_config(dry_run=False)
     assert result.startswith("Error: save did not complete")
     assert "unknown" in result
 

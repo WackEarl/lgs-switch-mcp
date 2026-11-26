@@ -39,6 +39,7 @@ allowed_commands:
   - show ssh-configurations
   - show telnet server
   - show http server status
+  - show ip http secure server status
   - show lbd state
   - show lbd port state
   # SNMP read-back. show snmp community is redacted by the wrapper.
@@ -50,6 +51,36 @@ allowed_commands:
   - show snmp group
   - show snmp group access
   - show snmp user
+  # 0.3.0 (read-only additions). Table layouts are not live-recorded yet.
+  - show logging-server
+  - show security-suite
+  - show access-lists
+  - show access-lists *
+  - show port-isolation status
+  - show monitor
+  - show monitor *
+  - show ip dns name-server
+  - show clock properties
+  - show dot1x
+  - show dot1x *
+  # RADIUS status only; output goes through strict line redaction (only
+  # "label: value" lines survive, key/secret values become [REDACTED]).
+  - show radius server
+  - show rmon
+  - show rmon *
+  - show qos global info
+  - show priority-map
+  - show class-policy
+  - show scheduler
+  - show ip igmp snooping
+  - show ip igmp snooping *
+  - show ipv6 mld snooping
+  - show ipv6 mld snooping *
+  - show voice vlan
+  - show ipv6 interface
+  - show ipv6 route
+  - show cli
+  - show history
 denied_commands:
   # Active tests / secrets / config dumps
   - show interface cable-diag*
@@ -58,7 +89,10 @@ denied_commands:
   - show snmp engineID*
   - show snmp target*
   - show snmp notif*
-  - show radius*
+  # show radius server is allow-listed above (strict redaction); every
+  # other radius show stays denied.
+  - show radius statistics*
+  - show radius server *
   - show running-config*
   - show current*
   - show startup-config*

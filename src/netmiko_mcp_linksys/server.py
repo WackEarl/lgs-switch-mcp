@@ -2,42 +2,38 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
+from contextvars import ContextVar
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
 from mcp.server import MCPServer
-from netmiko_mcp.security import (
-    build_abbreviation_filter,
-    load_commands,
-    validate_command,
-)
+from netmiko_mcp.security import validate_command
 
-from netmiko_mcp_linksys.audit import check_audit_path, write_audit
+from netmiko_mcp_linksys import configstore, readtools, writes, writetools
+from netmiko_mcp_linksys.audit import check_audit_path
 from netmiko_mcp_linksys.connection import (
     CONFIG_ERROR_PATTERN,
     READBACK_DESCRIPTION,
-    READBACK_INTERFACE,
-    READBACK_POE,
     SwitchConnectionError,
     _send_config,
-    build_admin_state_commands,
     build_description_commands,
-    build_poe_commands,
     read_timeout,
     redact_show_output,
-    run_config_and_readback,
     run_in_session,
-    run_save,
+    save_in_session,
+    send_paged_redacted,
     run_show,
     run_show_sequence,
     send_paged,
     session_log_path,
 )
+from netmiko_mcp_linksys.writes import read_config
 from netmiko_mcp_linksys.snmp_cli import (
     CLI_SOURCE,
     POE_SUBTREE,
@@ -64,6 +60,7 @@ from netmiko_mcp_linksys.snmp_cli import (
     parse_snmp_access,
     parse_snmp_community,
     parse_snmp_viewtree,
+    redact_command_list,
     resolve_removable_community_name,
     user_present,
     view_entry_problem,
@@ -72,10 +69,16 @@ from netmiko_mcp_linksys.snmp_cli import (
     view_is_restricted,
     view_is_write_safe,
 )
+from netmiko_mcp_linksys.tables import parse_system_information
+from netmiko_mcp_linksys.toolkit import (
+    fail,
+    ok,
+    prepare_runtime,
+    with_audit_warning,
+)
 from netmiko_mcp_linksys.validation import (
     ValidationError,
     redact_secrets,
-    reject_if_protected,
     reject_unsafe_show_command,
     require_snmp_write_enabled,
     validate_community_remove_name,
@@ -96,18 +99,21 @@ mcp = MCPServer(
     name="netmiko-mcp-linksys",
     instructions=(
         "MCP server for a single Linksys LGS-series switch, based on "
-        "netmiko and netmiko-mcp. Use show for allow-listed read commands. "
-        "Configuration tools build fixed CLI sequences; they do not accept "
-        "free-form config. There are no VLAN, reboot, or reset tools. "
-        "SNMP write tools (snmp_view_create, snmp_write_view_create, "
-        "snmp_community_create, snmp_community_remove, snmp_user_remove) "
-        "are narrow and must be "
-        "gated by hub unlock, like save_config. Write views hold only "
-        "ifAdminStatus, ifAlias and pethPsePortAdminEnable; the protected "
-        "ports are refused by the port tools only, not in the SNMP view. "
-        "The community secret comes "
-        "only from SWITCH_SNMP_COMMUNITY and is redacted as [REDACTED]. "
-        "Changes are not saved until save_config is called."
+        "netmiko and netmiko-mcp. Use show for allow-listed read commands "
+        "and the parsed read tools (health_summary, port_status, "
+        "port_counters, counters_delta, mac_table, lldp_neighbors, "
+        "poe_status, config_read, config_backup, config_diff, audit_tail, "
+        "show_help) for JSON. Configuration tools build fixed CLI "
+        "sequences; they do not accept free-form config. Every write tool "
+        "defaults to dry_run=true and only shows the commands, the current "
+        "and the expected state; pass dry_run=false to apply. Real writes "
+        "store a masked config snapshot first and return a before/after "
+        "diff. Protected ports are refused, caution ports need "
+        "confirm_caution_port=true. There are no VLAN, reboot, or reset "
+        "tools. SNMP write tools are narrow and gated by hub unlock, like "
+        "save_config. Secrets are redacted as [REDACTED] or "
+        "[REDACTED-LINE]. Changes are not saved until save_config is "
+        "called with dry_run=false."
     ),
     version=_PKG_VERSION,
 )
@@ -120,33 +126,9 @@ PORT_OVERVIEW_COMMANDS = (
 )
 
 
-def prepare_runtime() -> None:
-    """Point netmiko-mcp's command-file singleton at NETMIKO_MCP_COMMAND_FILE."""
-    command_file = (os.environ.get("NETMIKO_MCP_COMMAND_FILE") or "").strip()
-    if not command_file:
-        return
-    from netmiko_mcp.config import settings
-
-    settings.command_file = str(Path(command_file).expanduser())
-    load_commands.cache_clear()
-    build_abbreviation_filter.cache_clear()
-
-
-def _with_audit_warning(text: str, warning: str | None) -> str:
-    if not warning:
-        return text
-    return f"{text}\n\naudit_warning: {warning}"
-
-
-def _fail(tool: str, params: dict[str, Any], message: str, *, allowed: bool) -> str:
-    text = redact_secrets(message)
-    warning = write_audit(tool=tool, params=params, allowed=allowed, result=text)
-    return _with_audit_warning(text, warning)
-
-
-def _ok(tool: str, params: dict[str, Any], result: str) -> str:
-    warning = write_audit(tool=tool, params=params, allowed=True, result="ok")
-    return _with_audit_warning(result, warning)
+_with_audit_warning = with_audit_warning
+_fail = fail
+_ok = ok
 
 
 def startup_checks() -> list[str]:
@@ -264,42 +246,6 @@ def port_overview() -> str:
     if errors:
         body += "\n\n=== errors ===\n" + "\n".join(errors)
     return _ok("port_overview", params, body)
-
-
-@mcp.tool()
-def port_set_admin_state(port: str, enabled: bool) -> str:
-    """Enable or disable a switch port (no shutdown / shutdown). Does not save."""
-    params = {"port": port, "enabled": enabled}
-    try:
-        validate_port(port)
-        reject_if_protected(
-            port,
-            disabling=not enabled,
-            action="port_set_admin_state(enabled=False)",
-        )
-        commands = build_admin_state_commands(port, enabled)
-        output = run_config_and_readback(commands, READBACK_INTERFACE.format(port=port))
-    except ValidationError as exc:
-        return _fail("port_set_admin_state", params, f"Rejected: {exc}", allowed=False)
-    except SwitchConnectionError as exc:
-        return _fail("port_set_admin_state", params, f"Error: {exc}", allowed=True)
-    return _ok("port_set_admin_state", params, output)
-
-
-@mcp.tool()
-def poe_set(port: str, enabled: bool) -> str:
-    """Enable or disable PoE on a copper port (0/1..0/24). Does not save."""
-    params = {"port": port, "enabled": enabled}
-    try:
-        validate_port(port, poe=True)
-        reject_if_protected(port, disabling=not enabled, action="poe_set(enabled=False)")
-        commands = build_poe_commands(port, enabled)
-        output = run_config_and_readback(commands, READBACK_POE.format(port=port))
-    except ValidationError as exc:
-        return _fail("poe_set", params, f"Rejected: {exc}", allowed=False)
-    except SwitchConnectionError as exc:
-        return _fail("poe_set", params, f"Error: {exc}", allowed=True)
-    return _ok("poe_set", params, output)
 
 
 def _collapse_ws(text: str) -> str:
@@ -551,22 +497,103 @@ def description_readback_note(readback: str, port: str, text: str | None) -> str
 
 
 @mcp.tool()
-def port_set_description(port: str, text: str | None = None) -> str:
-    """Set an interface description, or clear it when text is omitted. Does not save."""
-    params = {"port": port, "text": text}
+def port_set_description(port: str, text: str | None = None, dry_run: bool = True) -> str:
+    """Set an interface description, or clear it when text is omitted.
+
+    Allowed on every port (protected and caution ports included).
+    dry_run=true (default) only shows the commands and current state.
+    Does not save.
+    """
+    tool = "port_set_description"
+    params = {"port": port, "text": text, "dry_run": dry_run}
     try:
+        if not isinstance(dry_run, bool):
+            raise ValidationError("dry_run must be true or false.")
         validate_port(port)
         if text is not None:
             validate_description(text)
-        commands = build_description_commands(port, text)
-        output = run_config_and_readback(commands, READBACK_DESCRIPTION)
-        output = f"{output}\n\n{description_readback_note(output, port, text)}"
+        plan = writes.WritePlan(
+            tool=tool,
+            stages=[writes.Stage(build_description_commands(port, text))],
+            readbacks=[READBACK_DESCRIPTION],
+            expected=(
+                f"description of {port} = {text!r}" if text is not None
+                else f"description of {port} cleared"
+            ),
+        )
+        output = writes.execute(plan, dry_run=dry_run)
+        if not dry_run:
+            data = json.loads(output)
+            data["readback_note"] = description_readback_note(
+                data.get("after", {}).get(READBACK_DESCRIPTION, ""), port, text
+            )
+            output = json.dumps(data, indent=2, ensure_ascii=False)
     except ValidationError as exc:
-        return _fail("port_set_description", params, f"Rejected: {exc}", allowed=False)
+        return _fail(tool, params, f"Rejected: {exc}", allowed=False)
     except SwitchConnectionError as exc:
-        return _fail("port_set_description", params, f"Error: {exc}", allowed=True)
-    return _ok("port_set_description", params, output)
+        return _fail(tool, params, f"Error: {exc}", allowed=True)
+    return ok(tool, params, output, audit_result="dry run" if dry_run else "ok")
 
+
+class _DryRunStop(BaseException):  # noqa: N818 - control flow, not an error
+    """Raised by _snmp_send in a dry run, before anything is sent.
+
+    BaseException, so the generic ``except Exception`` rollback handlers in
+    the SNMP tools do not catch it; the session still closes (finally)."""
+
+    def __init__(self, commands: list[str]) -> None:
+        super().__init__("dry run")
+        self.commands = list(commands)
+
+
+_SNMP_DRY_RUN: ContextVar[bool] = ContextVar("snmp_dry_run", default=False)
+_SNMP_SNAPSHOT: ContextVar[dict[str, Any] | None] = ContextVar("snmp_snapshot", default=None)
+
+
+def _snmp_send(conn: Any, commands: list[str], **kwargs: Any) -> str:
+    """Send an SNMP config set, honoring dry run and the pre-write snapshot.
+
+    In a dry run, all prechecks before the first send have passed when this
+    raises. The snapshot is taken once, right before the first real send."""
+    if _SNMP_DRY_RUN.get():
+        raise _DryRunStop(commands)
+    state = _SNMP_SNAPSHOT.get()
+    if state is not None and "result" not in state:
+        result = writes.take_snapshot(conn, state["tool"])
+        result.pop("config", None)
+        state["result"] = result
+    return _send_config(conn, commands, **kwargs)
+
+
+def _snmp_call(tool: str, params: dict[str, Any], dry_run: bool, impl: Any) -> str:
+    """Run an SNMP tool implementation as dry run or for real."""
+    if not isinstance(dry_run, bool):
+        return _fail(tool, params, "Rejected: dry_run must be true or false.", allowed=False)
+    flag = _SNMP_DRY_RUN.set(dry_run)
+    snap = _SNMP_SNAPSHOT.set(None if dry_run else {"tool": tool})
+    try:
+        result = impl()
+        state = _SNMP_SNAPSHOT.get()
+    except _DryRunStop as stop:
+        data = {
+            "tool": tool,
+            "dry_run": True,
+            "sent": False,
+            "commands": redact_command_list(stop.commands),
+            "note": (
+                "Dry run: the prechecks passed and nothing was sent. Later steps "
+                "(read-back, rollback) are not listed. Call again with "
+                "dry_run=false to apply."
+            ),
+        }
+        return ok(tool, {**params, "dry_run": True},
+                  redact_secrets(json.dumps(data, indent=2)), audit_result="dry run")
+    finally:
+        _SNMP_DRY_RUN.reset(flag)
+        _SNMP_SNAPSHOT.reset(snap)
+    if state is not None and isinstance(state.get("result"), dict):
+        result += "\n\npre-write snapshot: " + json.dumps(state["result"])
+    return result
 
 
 def _snmp_exec(conn: Any, command: str) -> str:
@@ -577,7 +604,7 @@ def _snmp_exec(conn: Any, command: str) -> str:
 def _snmp_syntax_note() -> str:
     return (
         "CLI syntax source: " + CLI_SOURCE + " "
-        "These commands are not live-confirmed; have Redy verify them "
+        "These commands are not live-confirmed; have the network admin verify them "
         "before relying on the result."
     )
 
@@ -654,8 +681,7 @@ def _precheck_read_view(conn: Any, view_name: str, oid: str) -> None:
             )
 
 
-@mcp.tool()
-def snmp_view_create(view_name: str, subtree: str) -> str:
+def _snmp_view_create_impl(view_name: str, subtree: str) -> str:
     """Add one allow-listed included subtree to an SNMP read view. Does not save.
 
     Gate this in the hub with unlock. subtree must be an OID or alias from
@@ -673,7 +699,7 @@ def snmp_view_create(view_name: str, subtree: str) -> str:
 
         def _run(conn: Any) -> str:
             _precheck_read_view(conn, view_name, oid)
-            _send_config(conn, commands)
+            _snmp_send(conn, commands)
             try:
                 view_out = _snmp_exec(conn, READBACK_SNMP_VIEW)
             except Exception as exc:  # noqa: BLE001 — must wrap any post-send failure
@@ -709,8 +735,7 @@ def snmp_view_create(view_name: str, subtree: str) -> str:
     return _ok("snmp_view_create", params, redact_secrets(body))
 
 
-@mcp.tool()
-def snmp_write_view_create(view_name: str, subtree: str) -> str:
+def _snmp_write_view_create_impl(view_name: str, subtree: str) -> str:
     """Add one writable column to an SNMP write view. Does not save.
 
     Gate this in the hub with unlock. subtree must be ifAdminStatus
@@ -763,7 +788,7 @@ def _rollback_write_view(
     """
     send_note = ""
     try:
-        _send_config(
+        _snmp_send(
             conn, [f"no snmp view {view_name} {oid}"], error_pattern=CONFIG_ERROR_PATTERN
         )
     except Exception:  # noqa: BLE001 — judged by the read-back
@@ -799,7 +824,7 @@ def _apply_write_view(
     commands = build_write_view_commands(view_name, oid) if include_new else []
     try:
         if commands:
-            _send_config(conn, commands, error_pattern=CONFIG_ERROR_PATTERN)
+            _snmp_send(conn, commands, error_pattern=CONFIG_ERROR_PATTERN)
         view_out, after = _read_views(conn)
         ok, note = view_is_write_safe(after, view_name)
         if not ok:
@@ -899,8 +924,7 @@ def _precheck_view_for_community(
         )
 
 
-@mcp.tool()
-def snmp_community_create(
+def _snmp_community_create_impl(
     view_name: str, access: str, write_view: str | None = None
 ) -> str:
     """Create a v2c community from SWITCH_SNMP_COMMUNITY, bound to views.
@@ -928,7 +952,7 @@ def snmp_community_create(
             _precheck_view_for_community(
                 conn, view_name, write_view if access == "rw" else None
             )
-            _send_config(conn, commands)
+            _snmp_send(conn, commands)
             try:
                 community_out = _snmp_exec(conn, READBACK_SNMP_COMMUNITY)
                 group_out = _snmp_exec(conn, READBACK_SNMP_GROUP)
@@ -976,8 +1000,7 @@ def snmp_community_create(
     return _ok("snmp_community_create", params, redact_secrets(body))
 
 
-@mcp.tool()
-def snmp_community_remove(name: str) -> str:
+def _snmp_community_remove_impl(name: str) -> str:
     """Remove an allow-listed default community (public or private).
 
     Refuses unless the configured SWITCH_SNMP_COMMUNITY community is
@@ -1005,7 +1028,7 @@ def snmp_community_remove(name: str) -> str:
             entries = parse_snmp_community(community_out)
             exact = resolve_removable_community_name(requested, entries, community)
             commands = build_community_remove_commands(exact)
-            _send_config(conn, commands)
+            _snmp_send(conn, commands)
             try:
                 after = _snmp_exec(conn, READBACK_SNMP_COMMUNITY)
                 still = any(
@@ -1049,8 +1072,7 @@ def snmp_community_remove(name: str) -> str:
     return _ok("snmp_community_remove", params, redact_secrets(body))
 
 
-@mcp.tool()
-def snmp_user_remove(name: str) -> str:
+def _snmp_user_remove_impl(name: str) -> str:
     """Remove an allow-listed SNMP user (noAuthUser). Does not save.
 
     Gate this in the hub with unlock. The CLI syntax is not live-confirmed.
@@ -1072,7 +1094,7 @@ def snmp_user_remove(name: str) -> str:
                     + "\n"
                     + _snmp_syntax_note()
                 )
-            _send_config(conn, commands)
+            _snmp_send(conn, commands)
             try:
                 after = _snmp_exec(conn, READBACK_SNMP_USER)
                 if user_present(after, name):
@@ -1106,15 +1128,153 @@ def snmp_user_remove(name: str) -> str:
     return _ok("snmp_user_remove", params, redact_secrets(body))
 
 
-@mcp.tool()
-def save_config() -> str:
-    """Copy running-config to startup-config by sending the privileged exec command 'save'."""
-    params: dict[str, Any] = {}
+_DRY_RUN_DOC = (
+    "\n\n    dry_run=true (default) runs the read-only prechecks and returns the "
+    "commands the\n    first configuration step would send; nothing is sent."
+)
+
+
+def snmp_view_create(view_name: str, subtree: str, dry_run: bool = True) -> str:
+    return _snmp_call(
+        "snmp_view_create", {"view_name": view_name, "subtree": subtree}, dry_run,
+        lambda: _snmp_view_create_impl(view_name, subtree),
+    )
+
+
+def snmp_write_view_create(view_name: str, subtree: str, dry_run: bool = True) -> str:
+    return _snmp_call(
+        "snmp_write_view_create", {"view_name": view_name, "subtree": subtree}, dry_run,
+        lambda: _snmp_write_view_create_impl(view_name, subtree),
+    )
+
+
+def snmp_community_create(
+    view_name: str, access: str, write_view: str | None = None, dry_run: bool = True
+) -> str:
+    return _snmp_call(
+        "snmp_community_create",
+        {"view_name": view_name, "access": access, "write_view": write_view},
+        dry_run,
+        lambda: _snmp_community_create_impl(view_name, access, write_view),
+    )
+
+
+def snmp_community_remove(name: str, dry_run: bool = True) -> str:
+    return _snmp_call(
+        "snmp_community_remove", {"name": name}, dry_run,
+        lambda: _snmp_community_remove_impl(name),
+    )
+
+
+def snmp_user_remove(name: str, dry_run: bool = True) -> str:
+    return _snmp_call(
+        "snmp_user_remove", {"name": name}, dry_run, lambda: _snmp_user_remove_impl(name)
+    )
+
+
+for _public, _impl in (
+    (snmp_view_create, _snmp_view_create_impl),
+    (snmp_write_view_create, _snmp_write_view_create_impl),
+    (snmp_community_create, _snmp_community_create_impl),
+    (snmp_community_remove, _snmp_community_remove_impl),
+    (snmp_user_remove, _snmp_user_remove_impl),
+):
+    _public.__doc__ = (_impl.__doc__ or "").rstrip() + _DRY_RUN_DOC
+    mcp.tool()(_public)
+
+
+SAVE_SNAPSHOT_TAG = "pre-save"
+
+
+def _save_flow(conn: Any, dry_run: bool) -> dict[str, Any]:
+    """save_config steps on one session (see save_config)."""
+    warnings: list[str] = []
+    data: dict[str, Any] = {"tool": "save_config", "dry_run": dry_run}
+
+    def _config(source: str) -> str | None:
+        try:
+            return read_config(conn, source)
+        except SwitchConnectionError as exc:
+            warnings.append(f"{source}-config unavailable: {exc}")
+            return None
+
+    startup_old = _config("startup")
+    if dry_run:
+        running = _config("running")
+        if startup_old is not None and running is not None:
+            data["diff_startup_to_running"] = configstore.unified_diff(
+                startup_old, running, before_label="startup-config", after_label="running-config"
+            )
+        data["config_save_status"] = parse_system_information(
+            send_paged_redacted(conn, "show system information")
+        )["config_save_status"]
+        data.update(sent=False, commands=["save"], warnings=warnings,
+                    note="Dry run: nothing was saved. Call again with dry_run=false to save.")
+        return data
+
+    mode = writes.snapshot_mode()
+    if mode == "off":
+        data["backup"] = {"skipped": "SWITCH_PRE_WRITE_SNAPSHOT=off"}
+    elif startup_old is None:
+        if mode == "required":
+            raise SwitchConnectionError(
+                "Backup of the current startup-config failed, nothing was saved: "
+                + "; ".join(warnings)
+                + " (set SWITCH_PRE_WRITE_SNAPSHOT=best-effort to save without it)."
+            )
+        data["backup"] = {"failed": "; ".join(warnings)}
+    else:
+        try:
+            backup = configstore.store_backup(startup_old, "startup", tag=SAVE_SNAPSHOT_TAG)
+            backup.pop("diff", None)
+            data["backup"] = backup
+        except OSError as exc:
+            if mode == "required":
+                raise SwitchConnectionError(
+                    f"Backup not written, nothing was saved: {exc}"
+                ) from None
+            data["backup"] = {"failed": str(exc)}
+    data["device_output"] = save_in_session(conn)
+    startup_new = _config("startup")
+    if startup_old is not None and startup_new is not None:
+        data["diff_startup_old_to_new"] = configstore.unified_diff(
+            startup_old, startup_new, before_label="startup-config (before)",
+            after_label="startup-config (after)",
+        )
     try:
-        output = run_save()
+        data["config_save_status"] = parse_system_information(
+            send_paged_redacted(conn, "show system information")
+        )["config_save_status"]
+    except Exception as exc:  # noqa: BLE001 - save already done; report only
+        warnings.append(f"show system information failed: {redact_secrets(str(exc))}")
+    data.update(sent=True, commands=["save"], warnings=warnings)
+    return data
+
+
+@mcp.tool()
+def save_config(dry_run: bool = True) -> str:
+    """Copy running-config to startup-config (privileged exec 'save').
+
+    dry_run=true (default): masked diff startup -> running (what would be
+    saved) and the Config Save Status; nothing is saved. dry_run=false:
+    backs up the current startup-config (masked, SWITCH_BACKUP_DIR), saves,
+    returns the diff old -> new startup-config and the Config Save Status.
+    Gate with hub unlock.
+    """
+    params: dict[str, Any] = {"dry_run": dry_run}
+    if not isinstance(dry_run, bool):
+        return _fail("save_config", params, "Rejected: dry_run must be true or false.",
+                     allowed=False)
+    try:
+        data = run_in_session(lambda conn: _save_flow(conn, dry_run), enable_session_log=False)
     except (ValidationError, SwitchConnectionError) as exc:
         return _fail("save_config", params, f"Error: {exc}", allowed=True)
-    return _ok("save_config", params, output)
+    return ok("save_config", params, json.dumps(data, indent=2, ensure_ascii=False),
+              audit_result="dry run" if dry_run else "ok")
+
+
+for _function in (*readtools.READ_TOOLS, *writetools.WRITE_TOOLS):
+    mcp.tool()(_function)
 
 
 def main() -> None:

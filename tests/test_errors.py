@@ -77,13 +77,13 @@ def test_session_reraises_switch_connection_error() -> None:
 
 
 def test_tools_still_refuse_protected_ports(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys.server import poe_set, port_set_admin_state
+    from netmiko_mcp_linksys.writetools import poe_disable, port_disable
 
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/10,0/24")
-    with patch("netmiko_mcp_linksys.server.run_config_and_readback") as run:
+    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
         for port in ("0/10", "0/24"):
-            admin = port_set_admin_state(port, False)
-            poe = poe_set(port, False)
+            admin = port_disable(port, dry_run=False)
+            poe = poe_disable(port, dry_run=False)
             assert admin.startswith("Rejected:")
             assert poe.startswith("Rejected:")
             assert f"protected port {port}" in admin
