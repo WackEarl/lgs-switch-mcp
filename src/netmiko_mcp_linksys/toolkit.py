@@ -7,7 +7,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-from netmiko_mcp.security import build_abbreviation_filter, load_commands, validate_command
+from netmiko_mcp.security import (
+    build_abbreviation_filter,
+    load_commands,
+    validate_command,
+)
 
 from netmiko_mcp_linksys.audit import write_audit
 from netmiko_mcp_linksys.validation import redact_secrets

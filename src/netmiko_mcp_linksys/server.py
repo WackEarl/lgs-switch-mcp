@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -16,7 +17,7 @@ from mcp.server import MCPServer
 from netmiko_mcp.security import validate_command
 
 from netmiko_mcp_linksys import configstore, readtools, writes, writetools
-from netmiko_mcp_linksys.audit import check_audit_path
+from netmiko_mcp_linksys.audit import audited_call, check_audit_path
 from netmiko_mcp_linksys.connection import (
     CONFIG_ERROR_PATTERN,
     READBACK_DESCRIPTION,
@@ -26,14 +27,13 @@ from netmiko_mcp_linksys.connection import (
     read_timeout,
     redact_show_output,
     run_in_session,
-    save_in_session,
-    send_paged_redacted,
     run_show,
     run_show_sequence,
+    save_in_session,
     send_paged,
+    send_paged_redacted,
     session_log_path,
 )
-from netmiko_mcp_linksys.writes import read_config
 from netmiko_mcp_linksys.snmp_cli import (
     CLI_SOURCE,
     POE_SUBTREE,
@@ -78,8 +78,11 @@ from netmiko_mcp_linksys.toolkit import (
 )
 from netmiko_mcp_linksys.validation import (
     ValidationError,
+    port_policy_text,
     redact_secrets,
+    reject_protected_port,
     reject_unsafe_show_command,
+    require_caution_confirmation,
     require_snmp_write_enabled,
     validate_community_remove_name,
     validate_description,
@@ -89,6 +92,7 @@ from netmiko_mcp_linksys.validation import (
     validate_snmp_name,
     validate_user_remove_name,
 )
+from netmiko_mcp_linksys.writes import read_config
 
 try:
     _PKG_VERSION = version("netmiko-mcp-linksys")
@@ -113,8 +117,9 @@ mcp = MCPServer(
         "tools. SNMP write tools are narrow and gated by hub unlock, like "
         "save_config. Secrets are redacted as [REDACTED] or "
         "[REDACTED-LINE]. Changes are not saved until save_config is "
-        "called with dry_run=false."
-    ),
+        "called with dry_run=false. The startup-config cannot be read on "
+        "this device. "
+    ) + port_policy_text(),
     version=_PKG_VERSION,
 )
 
@@ -166,7 +171,6 @@ def startup_checks() -> list[str]:
     return warnings
 
 
-@mcp.tool()
 def show(command: str) -> str:
     """Run an allow-listed show command on the switch (no TextFSM parsing)."""
     params = {"command": command}
@@ -198,7 +202,6 @@ def show(command: str) -> str:
     return _ok("show", params, output)
 
 
-@mcp.tool()
 def port_overview() -> str:
     """Read a bundle of allow-listed status commands in a single session.
 
@@ -496,22 +499,33 @@ def description_readback_note(readback: str, port: str, text: str | None) -> str
     return f"Read-back check: description is {parsed!r}, expected {text!r}."
 
 
-@mcp.tool()
-def port_set_description(port: str, text: str | None = None, dry_run: bool = True) -> str:
+def port_set_description(
+    port: str, text: str | None = None, confirm_caution_port: bool = False, dry_run: bool = True
+) -> str:
     """Set an interface description, or clear it when text is omitted.
 
-    Allowed on every port (protected and caution ports included).
-    dry_run=true (default) only shows the commands and current state.
-    Does not save.
+    Refused on protected ports (SWITCH_PROTECTED_PORTS; unset or invalid
+    list refuses every port); caution ports (SWITCH_CAUTION_PORTS) need
+    confirm_caution_port=true. dry_run=true (default) only shows the
+    commands and current state. Does not save.
     """
     tool = "port_set_description"
-    params = {"port": port, "text": text, "dry_run": dry_run}
+    params = {
+        "port": port, "text": text, "confirm_caution_port": confirm_caution_port,
+        "dry_run": dry_run,
+    }
     try:
         if not isinstance(dry_run, bool):
             raise ValidationError("dry_run must be true or false.")
+        if not isinstance(confirm_caution_port, bool):
+            raise ValidationError("confirm_caution_port must be true or false.")
         validate_port(port)
         if text is not None:
             validate_description(text)
+        reject_protected_port(port, action=tool)
+        warnings = []
+        if require_caution_confirmation(port, confirmed=confirm_caution_port, action=tool):
+            warnings.append(f"{port} is a caution port; confirmed with confirm_caution_port=true.")
         plan = writes.WritePlan(
             tool=tool,
             stages=[writes.Stage(build_description_commands(port, text))],
@@ -520,6 +534,7 @@ def port_set_description(port: str, text: str | None = None, dry_run: bool = Tru
                 f"description of {port} = {text!r}" if text is not None
                 else f"description of {port} cleared"
             ),
+            warnings=warnings,
         )
         output = writes.execute(plan, dry_run=dry_run)
         if not dry_run:
@@ -535,7 +550,7 @@ def port_set_description(port: str, text: str | None = None, dry_run: bool = Tru
     return ok(tool, params, output, audit_result="dry run" if dry_run else "ok")
 
 
-class _DryRunStop(BaseException):  # noqa: N818 - control flow, not an error
+class _DryRunStop(BaseException):
     """Raised by _snmp_send in a dry run, before anything is sent.
 
     BaseException, so the generic ``except Exception`` rollback handlers in
@@ -1180,34 +1195,46 @@ for _public, _impl in (
     (snmp_user_remove, _snmp_user_remove_impl),
 ):
     _public.__doc__ = (_impl.__doc__ or "").rstrip() + _DRY_RUN_DOC
-    mcp.tool()(_public)
 
 
-SAVE_SNAPSHOT_TAG = "pre-save"
+SAVE_SNAPSHOT_TAG = readtools.SAVED_TAG
 
 
 def _save_flow(conn: Any, dry_run: bool) -> dict[str, Any]:
-    """save_config steps on one session (see save_config)."""
+    """save_config steps on one session (see save_config).
+
+    The LGS CLI cannot show the startup-config, so the backup is the masked
+    running-config that is about to be saved (tag pre-save). It is also the
+    baseline for config_diff and for the next save's diff."""
     warnings: list[str] = []
     data: dict[str, Any] = {"tool": "save_config", "dry_run": dry_run}
 
-    def _config(source: str) -> str | None:
-        try:
-            return read_config(conn, source)
-        except SwitchConnectionError as exc:
-            warnings.append(f"{source}-config unavailable: {exc}")
-            return None
+    running: str | None
+    try:
+        running = read_config(conn, "running")
+    except SwitchConnectionError as exc:
+        running = None
+        warnings.append(f"running-config unavailable: {exc}")
+    previous_path, previous = readtools.last_saved_copy()
+    data["startup_config"] = "not readable on this device"
+    data["previous_save_copy"] = previous_path
 
-    startup_old = _config("startup")
-    if dry_run:
-        running = _config("running")
-        if startup_old is not None and running is not None:
-            data["diff_startup_to_running"] = configstore.unified_diff(
-                startup_old, running, before_label="startup-config", after_label="running-config"
-            )
-        data["config_save_status"] = parse_system_information(
+    def _system_status() -> str | None:
+        return parse_system_information(
             send_paged_redacted(conn, "show system information")
         )["config_save_status"]
+
+    if dry_run:
+        if running is not None and previous is not None:
+            data["diff_last_save_to_running"] = configstore.unified_diff(
+                previous, running, before_label="last save (pre-save copy)",
+                after_label="running-config",
+            )
+        elif running is not None:
+            warnings.append(
+                "No copy from an earlier save_config yet; no diff of what would change."
+            )
+        data["config_save_status"] = _system_status()
         data.update(sent=False, commands=["save"], warnings=warnings,
                     note="Dry run: nothing was saved. Call again with dry_run=false to save.")
         return data
@@ -1215,51 +1242,49 @@ def _save_flow(conn: Any, dry_run: bool) -> dict[str, Any]:
     mode = writes.snapshot_mode()
     if mode == "off":
         data["backup"] = {"skipped": "SWITCH_PRE_WRITE_SNAPSHOT=off"}
-    elif startup_old is None:
+    elif running is None:
         if mode == "required":
             raise SwitchConnectionError(
-                "Backup of the current startup-config failed, nothing was saved: "
+                "Backup of the running-config to be saved failed, nothing was saved: "
                 + "; ".join(warnings)
                 + " (set SWITCH_PRE_WRITE_SNAPSHOT=best-effort to save without it)."
             )
         data["backup"] = {"failed": "; ".join(warnings)}
     else:
         try:
-            backup = configstore.store_backup(startup_old, "startup", tag=SAVE_SNAPSHOT_TAG)
-            backup.pop("diff", None)
-            data["backup"] = backup
+            backup = configstore.store_backup(
+                running, "running", tag=SAVE_SNAPSHOT_TAG, diff_same_tag=True
+            )
         except OSError as exc:
             if mode == "required":
                 raise SwitchConnectionError(
                     f"Backup not written, nothing was saved: {exc}"
                 ) from None
             data["backup"] = {"failed": str(exc)}
+        else:
+            # The diff to the previous pre-save copy is what this save changes
+            # compared with the last save through this server.
+            data["diff_previous_save_to_saved"] = backup.pop("diff", None)
+            data["backup"] = backup
     data["device_output"] = save_in_session(conn)
-    startup_new = _config("startup")
-    if startup_old is not None and startup_new is not None:
-        data["diff_startup_old_to_new"] = configstore.unified_diff(
-            startup_old, startup_new, before_label="startup-config (before)",
-            after_label="startup-config (after)",
-        )
     try:
-        data["config_save_status"] = parse_system_information(
-            send_paged_redacted(conn, "show system information")
-        )["config_save_status"]
+        data["config_save_status"] = _system_status()
     except Exception as exc:  # noqa: BLE001 - save already done; report only
         warnings.append(f"show system information failed: {redact_secrets(str(exc))}")
     data.update(sent=True, commands=["save"], warnings=warnings)
     return data
 
 
-@mcp.tool()
 def save_config(dry_run: bool = True) -> str:
     """Copy running-config to startup-config (privileged exec 'save').
 
-    dry_run=true (default): masked diff startup -> running (what would be
-    saved) and the Config Save Status; nothing is saved. dry_run=false:
-    backs up the current startup-config (masked, SWITCH_BACKUP_DIR), saves,
-    returns the diff old -> new startup-config and the Config Save Status.
-    Gate with hub unlock.
+    The LGS CLI cannot show the startup-config. dry_run=true (default):
+    masked diff from the running-config stored at the last save through
+    this server to the current running-config, plus the Config Save Status;
+    nothing is saved. dry_run=false: stores the masked running-config that
+    is saved (SWITCH_BACKUP_DIR, tag pre-save; required unless
+    SWITCH_PRE_WRITE_SNAPSHOT=best-effort/off), saves, returns the diff to
+    the previous save copy and the Config Save Status. Gate with hub unlock.
     """
     params: dict[str, Any] = {"dry_run": dry_run}
     if not isinstance(dry_run, bool):
@@ -1273,8 +1298,43 @@ def save_config(dry_run: bool = True) -> str:
               audit_result="dry run" if dry_run else "ok")
 
 
-for _function in (*readtools.READ_TOOLS, *writetools.WRITE_TOOLS):
-    mcp.tool()(_function)
+# Port write tools show the configured protected/caution ports in their
+# description (read from the environment at start; nothing is hardcoded).
+PORT_POLICY_TOOLS = frozenset(
+    {
+        "port_set_description", "port_enable", "port_disable", "poe_enable", "poe_disable",
+        "poe_cycle", "port_security_set", "storm_control_set", "rate_limit_set",
+        "cable_diag", "clear_counters",
+    }
+)
+
+
+def tool_description(function: Any) -> str:
+    """Docstring, plus the current port policy for port write tools."""
+    doc = inspect.cleandoc(function.__doc__ or "")
+    if function.__name__ in PORT_POLICY_TOOLS:
+        doc = f"{doc}\n\n{port_policy_text()}"
+    return doc
+
+
+ALL_TOOLS = (
+    show,
+    port_overview,
+    port_set_description,
+    snmp_view_create,
+    snmp_write_view_create,
+    snmp_community_create,
+    snmp_community_remove,
+    snmp_user_remove,
+    save_config,
+    *readtools.READ_TOOLS,
+    *writetools.WRITE_TOOLS,
+)
+
+for _function in ALL_TOOLS:
+    mcp.tool(name=_function.__name__, description=tool_description(_function))(
+        audited_call(_function)
+    )
 
 
 def main() -> None:

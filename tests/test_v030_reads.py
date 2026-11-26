@@ -6,6 +6,7 @@ import json
 import os
 import re
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -135,7 +136,7 @@ def test_read_tool_without_command_file(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_config_read_is_masked(monkeypatch: pytest.MonkeyPatch) -> None:
-    install(monkeypatch, FakeSwitch({"show running-config": RUNNING_CONFIG}))
+    install(monkeypatch, FakeSwitch({"show current running-config": RUNNING_CONFIG}))
     data = json.loads(r.config_read())
     for secret in SECRETS_IN_RUNNING:
         assert secret not in data["config"]
@@ -143,15 +144,28 @@ def test_config_read_is_masked(monkeypatch: pytest.MonkeyPatch) -> None:
     assert r.config_read("current").startswith("Rejected:")
 
 
-def test_config_read_missing_command(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_config_read_uses_show_current_running_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    switch = install(monkeypatch, FakeSwitch({"show current running-config": RUNNING_CONFIG}))
+    json.loads(r.config_read("running"))
+    assert switch.shows == ["show current running-config"]
+
+
+def test_config_read_startup_is_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    switch = install(monkeypatch, FakeSwitch({"show current running-config": RUNNING_CONFIG}))
+    for result in (r.config_read("startup"), r.config_backup("startup")):
+        assert result.startswith("Not available: startup-config cannot be read on this device")
+    assert switch.shows == []  # nothing is sent for startup
+
+
+def test_config_read_rejected_running(monkeypatch: pytest.MonkeyPatch) -> None:
     install(monkeypatch, FakeSwitch({}))
-    result = r.config_read("startup")
-    assert result.startswith("Error: show startup-config is not available")
+    result = r.config_read("running")
+    assert result.startswith("Error: show current running-config is not available")
 
 
 def test_config_backup_and_diff_to_previous(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     changed = RUNNING_CONFIG.replace("Default Location", "Rack 2")
-    install(monkeypatch, FakeSwitch({"show running-config": [RUNNING_CONFIG, changed]}))
+    install(monkeypatch, FakeSwitch({"show current running-config": [RUNNING_CONFIG, changed]}))
     first = json.loads(r.config_backup())
     assert re.search(r"/\d{4}-\d{2}-\d{2}_\d{4}_running\.cfg$", first["path"])
     assert first["previous"] is None
@@ -160,29 +174,64 @@ def test_config_backup_and_diff_to_previous(tmp_path, monkeypatch: pytest.Monkey
     assert second["previous"] == first["path"]
     assert second["changed_since_previous"] is True
     assert "+system location Rack 2" in second["diff"]
-    body = open(second["path"], encoding="utf-8").read()
+    body = Path(second["path"]).read_text(encoding="utf-8")
     for secret in SECRETS_IN_RUNNING:
         assert secret not in body
     assert (os.stat(second["path"]).st_mode & 0o777) == 0o600
     assert r.config_backup(tag="bad tag").startswith("Rejected:")
 
 
-def test_config_diff(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_config_diff_against_last_save_copy(monkeypatch: pytest.MonkeyPatch) -> None:
     changed = RUNNING_CONFIG.replace("Default Location", "Rack 2")
-    install(
+    saved = configstore.store_backup(
+        json.loads(_masked_running(monkeypatch))["config"], "running", tag="pre-save"
+    )
+    switch = install(
         monkeypatch,
         FakeSwitch(
             {
-                "show startup-config": RUNNING_CONFIG,
-                "show running-config": changed,
+                "show current running-config": changed,
                 "show system information": "Config Save Status : Not Saved",
             }
         ),
     )
     data = json.loads(r.config_diff())
+    assert data["baseline"] == saved["path"]
     assert data["unsaved_changes"] is True
     assert data["config_save_status"] == "Not Saved"
     assert "-system location Default Location" in data["diff"]
+    assert "+system location Rack 2" in data["diff"]
+    assert data["startup_config"] == "not readable on this device"
+    assert "show startup-config" not in switch.shows
+
+
+def test_config_diff_without_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
+    install(
+        monkeypatch,
+        FakeSwitch(
+            {
+                "show current running-config": RUNNING_CONFIG,
+                "show system information": "Config Save Status : Successful",
+            }
+        ),
+    )
+    data = json.loads(r.config_diff())
+    assert data["unsaved_changes"] is None and data["diff"] is None
+    assert data["config_save_status"] == "Successful"
+    assert "save_config" in data["note"]
+
+
+def _masked_running(monkeypatch: pytest.MonkeyPatch) -> str:
+    install(monkeypatch, FakeSwitch({"show current running-config": RUNNING_CONFIG}))
+    return r.config_read()
+
+
+def test_latest_backup_by_tag() -> None:
+    a = configstore.store_backup("a\n", "running", tag="pre-save")
+    configstore.store_backup("b\n", "running", tag="pre-save_config")
+    configstore.store_backup("c\n", "running", tag="pre-port_enable")
+    assert str(configstore.latest_backup("running", tag="pre-save")) == a["path"]
+    assert configstore.latest_backup("running", tag="nothing") is None
 
 
 def test_backup_name_and_collision(tmp_path) -> None:

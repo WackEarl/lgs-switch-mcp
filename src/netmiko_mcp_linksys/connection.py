@@ -303,7 +303,7 @@ def disable_paging_best_effort(conn: Any) -> None:
             cmd_verify=False,
             read_timeout=read_timeout(),
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best effort; never raised to the caller
         warn(f"paging-off sequence failed ({exc}); relying on pager handling.", once_key="paging")
         return
     if config_output_is_error(str(output), commands=list(PAGING_OFF_CONFIG)):
@@ -332,13 +332,13 @@ def session(*, enable_session_log: bool = True) -> Iterator[Any]:
             raise
         except SwitchConnectionError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best effort; never raised to the caller
             raise wrap_transport_error(exc) from None
         finally:
             if conn is not None:
                 try:
                     conn.disconnect()
-                except Exception:
+                except Exception:  # noqa: BLE001, S110 - best effort; never raised to the caller
                     pass
             redact_session_log_file()
 
@@ -365,7 +365,7 @@ def send_paged(
     prompt_re = prompt_regex(conn)
     try:
         conn.clear_buffer()
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - best effort; never raised to the caller
         pass
     conn.write_channel(command + getattr(conn, "RETURN", "\n"))
     buffer = ""
@@ -501,7 +501,7 @@ def _send_config(
             read_timeout=read_timeout(),
             **kwargs,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best effort; never raised to the caller
         if _commands_include_snmp_community(commands):
             # Never return or log str(exc): netmiko cmd_verify timeouts
             # embed repr(re.escape(command)), which bypasses exact redaction.
@@ -539,7 +539,7 @@ def run_config_and_readback(commands: list[str], readback: str) -> str:
         _send_config(conn, commands)
         try:
             state_text = send_paged(conn, readback)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best effort; never raised to the caller
             raise wrap_transport_error(
                 exc,
                 message=(
@@ -591,7 +591,7 @@ def save_in_session(conn: Any) -> str:
     (prompt not live-confirmed)."""
     try:
         text = send_paged(conn, "save", confirm=(SAVE_CONFIRM_RE, SAVE_CONFIRM_ANSWER))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best effort; never raised to the caller
         # SwitchConnectionError messages are already redacted; redact again
         # for anything else (idempotent).
         raise wrap_transport_error(
@@ -630,7 +630,7 @@ def send_help(conn: Any, text: str, *, idle: float = HELP_IDLE_SECONDS) -> str:
     prompt_re = prompt_regex(conn)
     try:
         conn.clear_buffer()
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - best effort; never raised to the caller
         pass
     conn.write_channel(f"{text} ?")
     buffer = ""
@@ -676,12 +676,11 @@ def send_help(conn: Any, text: str, *, idle: float = HELP_IDLE_SECONDS) -> str:
 
 __all__ = [
     "CONFIG_ERROR_PATTERN",
-    "ConnectionError",
     "DEFAULT_READ_TIMEOUT",
     "MAX_PAGES",
     "MAX_READ_TIMEOUT",
-    "PAGE_BREAK",
     "PAGER_RE",
+    "PAGE_BREAK",
     "PAGING_OFF_CONFIG",
     "READBACK_DESCRIPTION",
     "READBACK_INTERFACE",
@@ -689,6 +688,7 @@ __all__ = [
     "SAVE_CONFIRM_ANSWER",
     "SAVE_CONFIRM_RE",
     "SEQUENCE_SKIPPED",
+    "ConnectionError",
     "SwitchConnectionError",
     "build_admin_state_commands",
     "build_description_commands",
@@ -706,11 +706,11 @@ __all__ = [
     "run_config_set",
     "run_in_session",
     "run_save",
-    "save_in_session",
-    "send_help",
     "run_show",
     "run_show_sequence",
     "run_shows",
+    "save_in_session",
+    "send_help",
     "send_paged",
     "send_paged_redacted",
     "session",

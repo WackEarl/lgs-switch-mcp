@@ -10,7 +10,8 @@ same allow/deny list format (`commands.yml`). Configuration tools send only
 fixed command sequences built by this wrapper; the model never supplies
 free-form config.
 
-**This is 0.3.0.** It adds parsed JSON read tools (`health_summary`,
+**This is 0.3.1**, the fixes from the first live check of 0.3.0 (see
+[What is new in 0.3.1](#what-is-new-in-031)). 0.3.0 added parsed JSON read tools (`health_summary`,
 `port_status`, `port_counters`, `counters_delta`, `mac_table`,
 `lldp_neighbors`, `poe_status`), masked config reads and backups
 (`config_read`, `config_backup`, `config_diff`), `audit_tail`,
@@ -22,7 +23,7 @@ write, checks device output for `%` and returns a before/after diff.
 Device text is redacted fail-closed, line by line. Protected ports are
 refused by every new port write tool; caution ports need an explicit
 confirmation. See [What is new in 0.3.0](#what-is-new-in-030) and
-[Live test 0.3.0](#live-test-030-network-admin).
+[Retest 0.3.1](#retest-031-network-admin).
 
 0.2.0 added the unlock-gated SNMP tools; 0.1.x was live-tested on an
 LGS328PC with firmware 1.01.02.02 (SSH with `ssh-rsa` via paramiko 4.0.0;
@@ -35,7 +36,7 @@ The intended way to run this server is the packaged entrypoint, pinned to a
 tag:
 
 ```bash
-uvx --from git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.0 netmiko-mcp-linksys
+uvx --from git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.1 netmiko-mcp-linksys
 ```
 
 From a local checkout:
@@ -54,7 +55,7 @@ A compatibility shim, `lgs_mcp.py`, exists only for the older hub invocation
 `python /config/netmiko/lgs_mcp.py`. That file is not a standalone
 implementation: it imports `netmiko_mcp_linksys`. Prefer the `uvx --from ...
 netmiko-mcp-linksys` entry above. If you must keep the old command, add
-`--with git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.0` so the
+`--with git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.1` so the
 package is installed in that environment.
 
 ## Environment variables
@@ -68,15 +69,15 @@ package is installed in that environment.
 | `SWITCH_SNMP_WRITE_ENABLED` | yes (`1`) before any SNMP write tool | Hard gate, **off by default**. SNMP write tools refuse unless this is exactly `1`. Leave it unset until the remaining unconfirmed CLI (community create/remove) has been verified live. |
 | `SWITCH_DEVICE_TYPE` | no | netmiko device type. Default: `cisco_s300`. |
 | `SWITCH_KNOWN_HOSTS` | yes (at tool call) | Path to an OpenSSH `known_hosts` file with the switch host key. System host keys are not used. |
-| `SWITCH_PROTECTED_PORTS` | yes before any port write | Comma-separated ports (e.g. `0/10,0/24`). `port_disable` and `poe_disable` refuse them; every other port write tool except `port_set_description`, `port_enable` and `poe_enable` refuses them in every direction (`port_security_set`, `storm_control_set`, `rate_limit_set`, `poe_cycle`, `cable_diag`, `clear_counters(port)`). If this variable is unset, empty, or contains an invalid port, those tools fail closed (every port is refused). |
-| `SWITCH_CAUTION_PORTS` | no | Comma-separated ports (e.g. `0/15`) where port write tools (except `port_set_description`) need `confirm_caution_port=true`. The flag is recorded in the audit log. Unset means no caution ports; an invalid entry refuses all port writes (fail-closed). |
+| `SWITCH_PROTECTED_PORTS` | yes before any port write | Comma-separated ports (e.g. `0/10,0/24`). `port_disable` and `poe_disable` refuse them; every other port write tool except `port_enable` and `poe_enable` refuses them in every direction (`port_set_description`, `port_security_set`, `storm_control_set`, `rate_limit_set`, `poe_cycle`, `cable_diag`, `clear_counters(port)`). The configured list is shown in the descriptions of the port write tools. If this variable is unset, empty, or contains an invalid port, those tools fail closed (every port is refused). |
+| `SWITCH_CAUTION_PORTS` | no | Comma-separated ports (e.g. `0/15`) where every port write tool needs `confirm_caution_port=true`. The flag is recorded in the audit log; the list is shown in the tool descriptions. Unset means no caution ports; an invalid entry refuses all port writes (fail-closed). |
 | `SWITCH_SYSLOG_ALLOWED` | yes before `syslog_set` | Comma-separated IPv4 addresses that `syslog_set` may configure as a syslog target. There is no free value: unset, empty, or invalid refuses `syslog_set`. |
 | `SWITCH_BACKUP_DIR` | no | Directory for masked config backups and pre-write snapshots. Default `/data/netmiko/backups` (created with mode `0700`, files `0600`). |
 | `SWITCH_STATE_DIR` | no | Directory for small state files (`counters_delta` baseline). Default `/data/netmiko/state`. |
-| `SWITCH_PRE_WRITE_SNAPSHOT` | no | `required` (default): a real write first stores a masked running-config snapshot and is refused if that fails. `best-effort`: write anyway and report the failure. `off`: no snapshot. `save_config` backs up the current startup-config under the same rule. |
+| `SWITCH_PRE_WRITE_SNAPSHOT` | no | `required` (default): a real write first stores a masked running-config snapshot and is refused if that fails. `best-effort`: write anyway and report the failure. `off`: no snapshot. `save_config` stores the masked running-config it saves under the same rule (the LGS cannot show its startup-config). |
 | `NETMIKO_MCP_COMMAND_FILE` | yes for `show`, `port_overview` and the parsed read tools | Path to a `commands.yml` allow/deny list. See `examples/commands.yml`. Restart the server after edits (`lru_cache`). |
-| `SWITCH_AUDIT_LOG` | no (recommended) | If set, append one JSON line per tool call. The file is created with mode `0600`. Passwords are redacted from parameters and results. There is no default path; unset means no audit (warned at startup). An unwritable path does not break tools: a warning goes to stderr and the result gets an `audit_warning:` line. |
-| `SWITCH_READ_TIMEOUT` | no | Seconds without new output before a command is given up. Also passed to netmiko as `read_timeout_override`. Default `60`, range `1`–`600`. |
+| `SWITCH_AUDIT_LOG` | no (recommended) | If set, append JSON lines per tool call: a `"phase": "start"` line with a `call_id` before the tool runs, and the result line with the same `call_id` and `duration_ms`. A start line without a result marks a call that was cut off (hub timeout such as MCP error `-32001`, server restart); `audit_tail` lists it as `unfinished`. The file is created with mode `0600`. Passwords are redacted from parameters and results. There is no default path; unset means no audit (warned at startup). An unwritable path does not break tools: a warning goes to stderr and the result gets an `audit_warning:` line. |
+| `SWITCH_READ_TIMEOUT` | no | Seconds without new output before a command is given up. Also passed to netmiko as `read_timeout_override`. Default `60`, range `1`–`600`. Keep it below the hub's request timeout for this server, or a slow command ends as a hub timeout (MCP `-32001`) instead of a tool error. |
 | `SWITCH_PAGING_OFF` | no | `1` (default) sends `configure terminal` / `set cli pagination off` / `end` at session start, best effort. `0` skips it; the pager loop handles paging either way. |
 | `SWITCH_SESSION_LOG` | no | Debug only. If set, netmiko appends a session log there (mode `0600`). netmiko masks the password (`no_log`) and only channel reads are recorded. The log does contain full show output (MAC/ARP tables, descriptions); unset it after debugging. An unwritable path disables the log with a warning. |
 
@@ -100,7 +101,7 @@ until it is set to a valid list, disable and PoE-off are refused.
     "command": "uvx",
     "args": [
       "--python", "3.12",
-      "--from", "git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.0",
+      "--from", "git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.1",
       "netmiko-mcp-linksys"
     ],
     "env": {
@@ -190,8 +191,8 @@ Copy `examples/commands.yml` to `NETMIKO_MCP_COMMAND_FILE`. Create
 | `port_enable(port, confirm_caution_port=False, dry_run=True)` | `interface gigabitethernet 0/N` then `no shutdown`. Allowed on protected ports. Replaces `port_set_admin_state(enabled=True)`. | no |
 | `port_disable(port, confirm_caution_port=False, dry_run=True)` | `interface gigabitethernet 0/N` then `shutdown`. Protected ports refused (fail-closed). Replaces `port_set_admin_state(enabled=False)`. | no |
 | `poe_enable(port, …)` / `poe_disable(port, …)` | `power inline enable` / `power inline disable`. PoE ports: `0/1`–`0/24`. `poe_disable` refuses protected ports. Replace `poe_set`. | no |
-| `port_set_description(port, text?, dry_run=True)` | `description "<text>"` (always quoted, the LGS CLI takes only one word unquoted) or `no description` when `text` is omitted. Allowed on every port. The result includes an informational read-back note (verified, quoted, empty, probably truncated, or could not verify). | no |
-| `save_config(dry_run=True)` | Dry run: masked diff startup → running and the `Config Save Status`. Real: backs up the current startup-config (masked), sends privileged exec `save`, returns the diff of the old and new startup-config and the `Config Save Status`. Gate with hub `unlock`. | yes |
+| `port_set_description(port, text?, confirm_caution_port=False, dry_run=True)` | `description "<text>"` (always quoted, the LGS CLI takes only one word unquoted) or `no description` when `text` is omitted. Protected ports refused (fail-closed), caution ports need `confirm_caution_port=true` (0.3.1). The result includes an informational read-back note (verified, quoted, empty, probably truncated, or could not verify). | no |
+| `save_config(dry_run=True)` | The LGS cannot show its startup-config. Dry run: masked diff from the running-config stored at the last save through this server to the current running-config, and the `Config Save Status`. Real: stores the masked running-config that is saved (`SWITCH_BACKUP_DIR`, tag `pre-save`; refused if that fails while `SWITCH_PRE_WRITE_SNAPSHOT=required`), sends privileged exec `save`, returns the diff to the previous save copy and the `Config Save Status`. Gate with hub `unlock`. | yes |
 | `snmp_view_create(view_name, subtree)` | Add one **included** subtree from a fixed OID allowlist (`interfaces`, `ifmib`, `power-ethernet`) to a **read** view. Refused for a view that is used as a write view or holds a writable column or an excluded entry. Gate with hub `unlock` and `SWITCH_SNMP_WRITE_ENABLED=1`. **Not live-confirmed.** | no |
 | `snmp_write_view_create(view_name, subtree)` | Add one writable column to a **write** view: `ifAdminStatus` (`1.3.6.1.2.1.2.2.1.7`), `ifAlias` (`1.3.6.1.2.1.31.1.1.1.18`) or `pethPsePortAdminEnable` (`1.3.6.1.2.1.105.1.1.1.3`, PoE on/off). One `snmp view <view> <column> included` line, sent with a `%` error check and verified in `show snmp viewtree`; on failure it is removed again (see below). Whole MIB subtrees are never allowed. **No per-port exclusions:** the column is writable for every port, protected ports included. Gate with hub `unlock` and `SWITCH_SNMP_WRITE_ENABLED=1`. **Create and viewtree read-back live-confirmed; rollback (`no snmp view`) is not.** | no |
 | `snmp_community_create(view_name, access, write_view=None)` | Create a v2c community from `SWITCH_SNMP_COMMUNITY` bound to an existing restricted read view (`view_name`). `ro`: write view `none`. `rw`: requires a separate `write_view` that passes the write-view check (only writable columns). The secret is never a tool argument. Gate with hub `unlock` and `SWITCH_SNMP_WRITE_ENABLED=1`. **Not live-confirmed.** | no |
@@ -207,18 +208,18 @@ redacted device text where offered):
 
 | Tool | Reads |
 | --- | --- |
-| `health_summary(log_entries=10)` | One session: `show system information` (uptime, Config Save Status), `show power detail` (budget, consumption), `show power inline` (W per port), `show interfaces status` (up/down, speed, duplex), `show interfaces counters` (only ports with error/discard counters > 0), `show logging` (last entries). |
+| `health_summary(log_entries=10)` | One session: `show system information` (uptime, Config Save Status), `show power detail` (budget, consumption), `show power inline` (W per port), `show interfaces status` (up/down, speed, duplex), `show interfaces counters` (only ports with error/discard counters > 0), `show logging` (last entries); `show device temperature`, `show system fan`, `show system utilization` (0.3.1, `environment`, only if allow-listed). |
 | `port_status()` | Per port: link, speed, duplex, description, VLANs, PoE (W/class/status), LLDP neighbor. |
 | `port_counters(port?)` | `show interfaces counters`, all ports or one. |
 | `counters_delta(port?)` | Difference since the previous call (baseline in `SWITCH_STATE_DIR`); `new_errors` lists growing error/discard counters. The first call stores the baseline. |
-| `mac_table(port?, mac?)` | `show mac-address-table` and `count`, filtered by port or MAC. |
+| `mac_table(port?, mac?)` | `show mac-address-table` and `count`, filtered by port or MAC. If the listing (with its own total line) and the count differ, `count_note` says so. |
 | `lldp_neighbors()` | `show lldp neighbors`. |
 | `poe_status()` | `show power detail` and `show power inline`. |
-| `config_read(source="running")` | Masked `show running-config` / `show startup-config`. Both stay denied for `show`. |
-| `config_backup(source="running", tag?)` | Stores the masked config as `SWITCH_BACKUP_DIR/YYYY-MM-DD_HHMM_<source>[_tag].cfg`; returns path, SHA256 and the diff to the previous backup of that source. |
-| `config_diff()` | Unsaved changes: masked diff startup → running plus `Config Save Status`. |
-| `audit_tail(n=50)` | Last `n` (1–500) audit entries, redacted again on read. |
-| `show_help(prefix="")` | Types `show <prefix> ?`, reads the help listing, clears the line with Ctrl-U. Nothing is executed. `prefix`: up to five words from `[a-z0-9-]`. |
+| `config_read(source="running")` | Masked `show current running-config`. `source="startup"` answers `Not available:` (the LGS has no show command for the startup-config). Stays denied for `show`. |
+| `config_backup(source="running", tag?)` | Stores the masked running-config as `SWITCH_BACKUP_DIR/YYYY-MM-DD_HHMM_running[_tag].cfg`; returns path, SHA256 and the diff to the previous running backup. |
+| `config_diff()` | Masked diff from the running-config stored by the last `save_config` through this server (tag `pre-save`) to the current running-config, plus `Config Save Status`. Without such a copy only the status is returned. Saves made elsewhere are not seen. |
+| `audit_tail(n=50)` | Last `n` (1–500) audit entries, redacted again on read; calls without a result are listed as `unfinished`. |
+| `show_help(prefix="")` | Types `show <prefix> ?`, reads the help listing, clears the line with Ctrl-U. Nothing is executed. `prefix`: up to five words from `[a-z0-9-]`. `keyword  description` help lines without a sensitive word are not treated as config lines (0.3.1); everything else is redacted as usual. |
 
 New in 0.3.0, writes (all `dry_run=True` by default, none saves):
 
@@ -258,13 +259,14 @@ own quoting cannot be broken out of.
 - **Protected ports, fail-closed.** `SWITCH_PROTECTED_PORTS` blocks
   `port_disable` and `poe_disable`, and every direction of the other port
   write tools (port security, storm control, rate limit, PoE cycle, cable
-  diagnostics, clear counters on a named port). `port_enable`,
-  `poe_enable` and `port_set_description` stay allowed. If the variable is
+  diagnostics, clear counters on a named port) and, since 0.3.1,
+  `port_set_description`. `port_enable` and `poe_enable` stay allowed. If
+  the variable is
   unset, empty, or contains an invalid port identifier, those tools refuse
   every port.
 - **Caution ports.** `SWITCH_CAUTION_PORTS` ports need
-  `confirm_caution_port=true` for every port write except the description;
-  the flag is in the audit log.
+  `confirm_caution_port=true` for every port write (the description
+  included since 0.3.1); the flag is in the audit log.
 - **Dry run by default.** Every write tool (including `save_config` and the
   SNMP tools) defaults to `dry_run=true`: it returns the exact CLI lines,
   the current state and the expected state, and sends nothing.
@@ -283,7 +285,8 @@ own quoting cannot be broken out of.
   `save_config`. In the hub, `save_config` and the SNMP write tools
   must be gated by `unlock`.
 - **Audit log** records time, tool, parameters, allow/deny, and a short
-  result (`ok`, `dry run`, or the error). Passwords are redacted from
+  result (`ok`, `dry run`, or the error), plus a start line per call so a
+  call cut off by a hub timeout or restart stays visible. Passwords are redacted from
   parameters, results, and error text (`***`). The SNMP community
   (`SWITCH_SNMP_COMMUNITY`) is redacted as `[REDACTED]`, including
   `show snmp community` listings.
@@ -297,7 +300,9 @@ own quoting cannot be broken out of.
   vocabulary (Enabled, MD5, None, …). Any other line that still contains
   `password|key|secret|community|auth|priv` is replaced by
   `[REDACTED-LINE]`. `show radius server` is strict: only `Label : value`
-  lines survive. Parsers run on redacted text.
+  lines survive, other lines become `[REDACTED-LINE]` (lines are replaced,
+  never dropped, so an empty result means the device printed nothing).
+  Parsers run on redacted text.
   Audit failures never abort a tool; they are reported on stderr and as an
   `audit_warning:` line in the result.
 - **paramiko 4.0.0** for `ssh-rsa`/SHA-1 host keys. Do not bump to 5.x
@@ -616,15 +621,76 @@ Still unconfirmed:
   users/passwords, reboot/reset, SSH off, Telnet on, LAG/STP, `interface
   range`, free-form config.
 
+## What is new in 0.3.1
+
+Fixes from the first live check of 0.3.0 on the LGS328PC (firmware
+1.01.02.02, read tools only):
+
+- **Config reads:** the running-config is read with `show current
+  running-config`. The LGS has no show command for the startup-config:
+  `config_read("startup")` / `config_backup("startup")` answer
+  `Not available:` without sending anything. The pre-write snapshot uses
+  the running-config, so `SWITCH_PRE_WRITE_SNAPSHOT=required` works again.
+- **save_config / config_diff:** a real `save_config` stores the masked
+  running-config it saves (tag `pre-save`); that copy is the baseline for
+  `config_diff` and for the next save's diff. Saves done outside this
+  server are not seen; `Config Save Status` is always returned.
+- **PoE parser:** the Port column holds `1`–`24`; multi-word columns
+  (`Power Limit Type`, `Auto Class`, `Max Power(W)`) no longer leak into
+  the power, class or device fields. New fields `max_power_w`,
+  `auto_class`, `limit_type`.
+- **VLAN parser:** `show vlan` key/value blocks (`Vlan ID : 1`, `Member
+  Ports : …`, `Untagged Ports : …`, wrapped lines, `Po` ports);
+  `port_status` reports a `parse_warning` when nothing is recognised.
+- **Allowlist (`examples/commands.yml`):** `show monitor all` and `show
+  monitor session *` instead of the incomplete `show monitor`; `show
+  priority-map in-priority-type` instead of `show priority-map`; `show
+  version` moved to the deny list (invalid on the LGS); new `show device
+  temperature`, `show system fan`, `show system utilization`, also read
+  by `health_summary`. There is no `show authorized-manager` (nor `show
+  env*`, `show cpu*`, `show memory*`).
+- **show_help:** a `snmp   SNMP information` help line was hidden as
+  `[REDACTED-LINE]` (it looked like an SNMP config line). Help entries
+  without a sensitive word are kept now; the other rules are unchanged.
+- **show radius server:** returned an empty result live. Strict redaction
+  replaces lines but never removes them, so the device printed nothing
+  (no RADIUS server configured), even though 802.1X uses RADIUS.
+- **Audit:** every call writes a start line; a call that never returns
+  (hub timeout `-32001`, restart) shows up as `unfinished` in
+  `audit_tail`. Result lines carry `call_id` and `duration_ms`.
+- **port_set_description:** refuses protected ports and needs
+  `confirm_caution_port=true` on caution ports (**behaviour change**).
+- **Tool descriptions** name the configured protected and caution ports
+  (read from `SWITCH_PROTECTED_PORTS` / `SWITCH_CAUTION_PORTS` at start).
+- **mac_table:** the listing showed 54 entries (with the device's own
+  total line), `show mac-address-table count` reported 85 dynamic
+  addresses. The listing is complete, so the gap is the device's
+  counting; `count_note` reports it instead of guessing.
+
+## Retest 0.3.1 (network admin)
+
+1. `config_read()` returns the masked running-config; `config_read("startup")`
+   answers `Not available`. No secret visible in the config.
+2. `config_backup()`, then `config_diff()` (no baseline yet: only the status).
+3. `poe_status`, `health_summary`, `port_status` with `include_raw=true`:
+   PoE ports, VLANs and `environment` filled, `parse_warnings` empty.
+4. `show monitor all`, `show priority-map in-priority-type`, `show device
+   temperature`, `show system fan`, `show system utilization`; `show
+   version` is refused.
+5. `show_help("")`: no `[REDACTED-LINE]` between `security-suite` and
+   `snmp-server`.
+6. `audit_tail`: start and result lines folded, `duration_ms` present.
+7. The write checks 7–13 of the 0.3.0 list below (not run yet), including
+   `save_config` (now: stored copy and diff to the previous save).
+
 ## Live test 0.3.0 (network admin)
 
-None of the 0.3.0 commands has run on the device yet. The parsers were
-written against the manual and synthetic outputs. Check, in this order,
-and record real outputs for the tests:
+Results of the first check (read tools only) are in "What is new in
+0.3.1"; points 7–13 are still open. The original list, in this order:
 
 1. `show running-config` and `show startup-config` exist (`config_read`
-   for both). If not, real writes need `SWITCH_PRE_WRITE_SNAPSHOT=best-effort`
-   and `save_config` cannot back up or diff; consider the TFTP export.
+   for both). Result: only `show current running-config` exists, no
+   startup show (fixed in 0.3.1).
 2. `config_read` output: no secret is visible (communities, SNMPv3 keys,
    user passwords, RADIUS key, certificates); structure stays readable.
 3. Parsers against real output: `health_summary`, `port_status`,
@@ -651,10 +717,11 @@ and record real outputs for the tests:
     `mgmt_services_set(http=false)`; read-back wording of `show ip http
     secure server status` (`Enabled`/`Disabled`).
 11. `clear_counters()` without port: does it ask for a confirmation?
-12. `save_config(dry_run=true)`, then `dry_run=false`: backup file, diff
-    and `Config Save Status`; the save prompt (#4).
-13. Protected ports: every port write tool refuses 0/10 and 0/24;
-    caution port 0/15 needs `confirm_caution_port=true`.
+12. `save_config(dry_run=true)`, then `dry_run=false`: stored copy of the
+    saved running-config, diff and `Config Save Status`; the save prompt (#4).
+13. Protected ports: every port write tool except `port_enable` and
+    `poe_enable` refuses the protected ports (`port_set_description`
+    included since 0.3.1); caution ports need `confirm_caution_port=true`.
 14. `audit_tail` shows the calls above, without secrets.
 
 ## Live-test status

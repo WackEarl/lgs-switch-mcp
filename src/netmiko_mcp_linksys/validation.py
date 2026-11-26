@@ -379,6 +379,36 @@ def require_caution_confirmation(port: str, *, confirmed: bool, action: str) -> 
     return True
 
 
+def port_policy_text() -> str:
+    """One line naming the configured protected and caution ports, for tool
+    descriptions. Reads the environment; never raises (an invalid or unset
+    list is described as fail-closed instead)."""
+    try:
+        protected = ", ".join(sorted(parse_protected_ports(), key=_port_sort_key))
+        protected_text = f"Protected ports (SWITCH_PROTECTED_PORTS): {protected}."
+    except ValidationError:
+        protected_text = (
+            "SWITCH_PROTECTED_PORTS is unset or invalid: port writes that check "
+            "it are refused on every port (fail-closed)."
+        )
+    try:
+        caution = sorted(parse_caution_ports(), key=_port_sort_key)
+        caution_text = (
+            f"Caution ports (SWITCH_CAUTION_PORTS, need confirm_caution_port=true): "
+            f"{', '.join(caution)}." if caution else "Caution ports (SWITCH_CAUTION_PORTS): none."
+        )
+    except ValidationError:
+        caution_text = (
+            "SWITCH_CAUTION_PORTS is invalid: port writes are refused (fail-closed)."
+        )
+    return f"{protected_text} {caution_text}"
+
+
+def _port_sort_key(port: str) -> tuple[int, int]:
+    slot, _, number = port.partition("/")
+    return (int(slot), int(number)) if slot.isdigit() and number.isdigit() else (999, 999)
+
+
 SYSLOG_FACILITIES = tuple(f"local{n}" for n in range(8))
 # ISS keywords from the manual ("notification", not "notifications").
 SYSLOG_SEVERITIES = (

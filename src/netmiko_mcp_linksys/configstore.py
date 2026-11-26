@@ -59,15 +59,24 @@ def backup_name(source: str, *, tag: str | None = None, now: datetime | None = N
     return f"{stamp}_{source}{suffix}.cfg"
 
 
-def latest_backup(source: str, *, exclude: Path | None = None) -> Path | None:
-    """Newest ``*_<source>*.cfg`` in the backup dir (by name, then mtime)."""
+def latest_backup(
+    source: str, *, exclude: Path | None = None, tag: str | None = None
+) -> Path | None:
+    """Newest ``*_<source>*.cfg`` in the backup dir (by mtime, then name).
+
+    With ``tag`` only ``*_<source>_<tag>.cfg`` (and its ``-N`` collision
+    variants) count, e.g. the copies save_config stores (tag pre-save)."""
     directory = backup_dir()
     if not directory.is_dir():
         return None
+    pattern = f"*_{source}_{tag}*.cfg" if tag else f"*_{source}*.cfg"
+    exact = re.compile(rf"_{re.escape(source)}_{re.escape(tag)}(?:-\d+)?\.cfg$") if tag else None
     candidates = [
         path
-        for path in directory.glob(f"*_{source}*.cfg")
-        if path.is_file() and (exclude is None or path != exclude)
+        for path in directory.glob(pattern)
+        if path.is_file()
+        and (exclude is None or path != exclude)
+        and (exact is None or exact.search(path.name))
     ]
     if not candidates:
         return None
@@ -90,8 +99,11 @@ def unified_diff(before: str, after: str, *, before_label: str, after_label: str
     return "\n".join(lines)
 
 
-def store_backup(masked: str, source: str, *, tag: str | None = None) -> dict[str, Any]:
-    """Write a masked config file and diff it against the previous backup.
+def store_backup(
+    masked: str, source: str, *, tag: str | None = None, diff_same_tag: bool = False
+) -> dict[str, Any]:
+    """Write a masked config file and diff it against the previous backup
+    (of the same source; with ``diff_same_tag`` of the same source and tag).
 
     Raises OSError when the directory or file cannot be written.
     """
@@ -99,7 +111,7 @@ def store_backup(masked: str, source: str, *, tag: str | None = None) -> dict[st
     if tag is not None and not _TAG_RE.fullmatch(tag):
         raise ValidationError(f"Invalid backup tag {tag!r}.")
     directory = _private_dir(backup_dir())
-    previous = latest_backup(source)
+    previous = latest_backup(source, tag=tag if diff_same_tag else None)
     name = backup_name(source, tag=tag)
     path = directory / name
     counter = 1
@@ -155,12 +167,12 @@ def clear_state(name: str) -> bool:
 
 __all__ = [
     "CONFIG_SOURCES",
-    "clear_state",
     "DEFAULT_BACKUP_DIR",
     "DEFAULT_STATE_DIR",
     "MAX_DIFF_LINES",
     "backup_dir",
     "backup_name",
+    "clear_state",
     "latest_backup",
     "read_state",
     "sha256_text",

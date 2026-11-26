@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-26
+
+Fixes from the first live check of 0.3.0 (LGS328PC, firmware 1.01.02.02,
+read tools only). The write checks are still open.
+
+### Fixed
+
+- Config reads use `show current running-config`; the LGS has no show
+  command for the startup-config. `config_read("startup")` and
+  `config_backup("startup")` answer `Not available:` without sending
+  anything. The pre-write snapshot works again with
+  `SWITCH_PRE_WRITE_SNAPSHOT=required`.
+- `save_config` no longer needs the startup-config: a real save stores
+  the masked running-config it saves (tag `pre-save`) and returns the diff
+  to the previous save copy; the dry run diffs that copy against the
+  current running-config. `config_diff` uses the same baseline.
+- PoE parser: Port column `1`–`24`; multi-word columns (`Power Limit
+  Type`, `Auto Class`, `Max Power(W)`) no longer leak into power, class or
+  device. New fields `max_power_w`, `auto_class`, `limit_type`.
+- VLAN parser: `show vlan` key/value blocks (`Vlan ID`, `Member Ports`,
+  `Untagged Ports`, wrapped lines, port-channels); `port_status` reports a
+  parse warning when nothing is recognised.
+- `show_help`: help lines such as `snmp   SNMP information` are no longer
+  hidden as `[REDACTED-LINE]`; help lines with a sensitive word are still
+  redacted.
+- Tool calls that never return (hub timeout, MCP error `-32001`, server
+  restart) are now visible in the audit log: each call writes a start line;
+  `audit_tail` lists calls without a result as `unfinished`. Result lines
+  carry `call_id` and `duration_ms`; an unexpected exception is audited.
+
+### Changed
+
+- `port_set_description` refuses protected ports (fail-closed) and needs
+  `confirm_caution_port=true` on caution ports (new parameter).
+- The descriptions of the port write tools and the server instructions
+  name the configured protected and caution ports (from the environment).
+- `examples/commands.yml`: `show monitor all` / `show monitor session *`
+  instead of `show monitor` and `show monitor *`; `show priority-map
+  in-priority-type` instead of `show priority-map`; `show version` is
+  denied (invalid on the LGS); new `show device temperature`, `show system
+  fan`, `show system utilization`.
+- `health_summary` adds `environment` (temperature, fan, utilization)
+  when those shows are allow-listed.
+- `mac_table` adds `count_note` when the listing and `show
+  mac-address-table count` disagree (live: 54 listed, 85 counted; the
+  listing is complete).
+
 ## [0.3.0] - 2026-11-26
 
 Not live-tested yet; see "Live test 0.3.0" in the README.

@@ -14,10 +14,10 @@ import pytest
 from netmiko_mcp_linksys.connection import (
     SAVE_CONFIRM_ANSWER,
     SAVE_CONFIRM_RE,
+    SwitchConnectionError,
     run_save,
     send_paged,
 )
-from netmiko_mcp_linksys.connection import SwitchConnectionError
 
 CONFIRM = (SAVE_CONFIRM_RE, SAVE_CONFIRM_ANSWER)
 

@@ -219,12 +219,30 @@ def _redact_line(line: str) -> str:
     return line
 
 
-def redact_sensitive_lines(text: str, *, strict: bool = False) -> str:
+# One CLI help entry: a keyword, 2+ spaces, a description ("snmp   SNMP
+# information"). Rule 3 would otherwise read "snmp <word>" as an SNMP
+# config line with an unknown sub-command and hide it (live check 0.3.0).
+_HELP_LINE_RE = re.compile(r"^\s*([a-z0-9][a-z0-9-]*)\s{2,}(\S.*)$", re.IGNORECASE)
+
+
+def _is_safe_help_line(line: str) -> bool:
+    """A help entry whose keyword and description hold no sensitive word and
+    no key-like token. Anything else goes through the normal rules."""
+    match = _HELP_LINE_RE.match(line)
+    if match is None:
+        return False
+    return not (_has_sensitive_word(line) or _has_blob(line) or _KEYWORD_VALUE_RE.search(line))
+
+
+def redact_sensitive_lines(text: str, *, strict: bool = False, help_listing: bool = False) -> str:
     """Apply the fail-closed line rules (see module docstring).
 
     ``strict=True`` (used for ``show radius …``) additionally removes every
     line that is not blank, a separator, or a ``Label : value`` line, so an
     unknown table layout cannot show a shared secret in a column.
+    ``help_listing=True`` (show_help) keeps ``keyword  description`` lines
+    that contain no sensitive word, instead of applying the SNMP rule to
+    a ``snmp`` help entry; every other line is handled as usual.
     """
     if not text:
         return text
@@ -240,6 +258,9 @@ def redact_sensitive_lines(text: str, *, strict: bool = False) -> str:
             out.append(REDACTED_LINE)
             in_block = not _PEM_END_RE.search(line[begin.end() :])
             continue
+        if help_listing and _is_safe_help_line(line):
+            out.append(line)
+            continue
         redacted = _redact_line(line)
         if strict and redacted == line and line.strip():
             is_separator = bool(re.fullmatch(r"[\s\-=+|]+", line))
@@ -249,9 +270,9 @@ def redact_sensitive_lines(text: str, *, strict: bool = False) -> str:
     return "\n".join(out)
 
 
-def redact_device_text(text: str, *, strict: bool = False) -> str:
+def redact_device_text(text: str, *, strict: bool = False, help_listing: bool = False) -> str:
     """Exact secret replacement first, then the fail-closed line rules."""
-    return redact_sensitive_lines(redact_secrets(text), strict=strict)
+    return redact_sensitive_lines(redact_secrets(text), strict=strict, help_listing=help_listing)
 
 
 __all__ = [

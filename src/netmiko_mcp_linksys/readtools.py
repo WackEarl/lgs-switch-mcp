@@ -40,7 +40,7 @@ from netmiko_mcp_linksys.validation import (
     validate_int,
     validate_port,
 )
-from netmiko_mcp_linksys.writes import read_config
+from netmiko_mcp_linksys.writes import ConfigUnavailableError, read_config
 
 COUNTERS_STATE = "counters.json"
 AUDIT_TAIL_MAX = 500
@@ -56,6 +56,14 @@ SHOW_VLAN = "show vlan"
 SHOW_LLDP = "show lldp neighbors"
 SHOW_MAC = "show mac-address-table"
 SHOW_MAC_COUNT = "show mac-address-table count"
+SHOW_TEMPERATURE = "show device temperature"
+SHOW_FAN = "show system fan"
+SHOW_UTILIZATION = "show system utilization"
+ENVIRONMENT_SHOWS = {
+    "temperature": SHOW_TEMPERATURE,
+    "fan": SHOW_FAN,
+    "utilization": SHOW_UTILIZATION,
+}
 
 
 class _Reads:
@@ -116,7 +124,9 @@ def _guard(tool: str, params: dict[str, Any]) -> str | None:
 def health_summary(log_entries: int = 10, include_raw: bool = False) -> str:
     """Daily health view in one session, as JSON: uptime, config save status,
     PoE budget/consumption, ports up/down with speed/duplex, only ports with
-    error/discard counters > 0, and the last log entries."""
+    error/discard counters > 0, the last log entries, and temperature, fan
+    and CPU/memory load (show device temperature, show system fan, show
+    system utilization) when the allowlist has them."""
     tool = "health_summary"
     params = {"log_entries": log_entries, "include_raw": include_raw}
     if (refusal := _guard(tool, params)) is not None:
@@ -126,8 +136,12 @@ def health_summary(log_entries: int = 10, include_raw: bool = False) -> str:
         _check_bool(include_raw, "include_raw")
     except ValidationError as exc:
         return fail(tool, params, f"Rejected: {exc}", allowed=False)
+    # The environment shows are new in 0.3.1: a commands.yml without them
+    # just leaves the section out instead of reporting rejections.
+    environment_allowed, _ = filter_commands(list(ENVIRONMENT_SHOWS.values()))
     reads = _read_bundle(
-        [SHOW_SYSTEM, SHOW_POWER_DETAIL, SHOW_POWER_INLINE, SHOW_STATUS, SHOW_COUNTERS, SHOW_LOGGING]
+        [SHOW_SYSTEM, SHOW_POWER_DETAIL, SHOW_POWER_INLINE, SHOW_STATUS, SHOW_COUNTERS, SHOW_LOGGING,
+         *(command for command, _ in environment_allowed)]
     )
     warnings: list[str] = []
     data: dict[str, Any] = {"time": datetime.now(UTC).isoformat()}
@@ -168,6 +182,13 @@ def health_summary(log_entries: int = 10, include_raw: bool = False) -> str:
         }
     if (text := reads.get(SHOW_LOGGING)) is not None:
         data["log_entries"] = tables.parse_log_entries(text, log_entries)
+    environment = {
+        name: tables.parse_environment(text)
+        for name, command in ENVIRONMENT_SHOWS.items()
+        if (text := reads.get(command)) is not None
+    }
+    if environment:
+        data["environment"] = environment
     data["parse_warnings"] = warnings
     return _respond(tool, params, reads, data, include_raw=include_raw)
 
@@ -210,7 +231,9 @@ def port_status(include_raw: bool = False) -> str:
         for port, description in tables.parse_interface_descriptions(text).items():
             entry(port)["description"] = description
     if (text := reads.get(SHOW_VLAN)) is not None:
-        for port, vlans in tables.parse_vlan_membership(text).items():
+        membership, notes = tables.parse_vlan_membership(text)
+        warnings += notes
+        for port, vlans in membership.items():
             entry(port)["vlans"] = vlans
     if (text := reads.get(SHOW_POWER_INLINE)) is not None:
         poe, notes = tables.parse_power_inline(text)
@@ -356,7 +379,28 @@ def mac_table(port: str | None = None, mac: str | None = None, include_raw: bool
         data["total_reported"] = total
     if (text := reads.get(SHOW_MAC_COUNT)) is not None:
         data["count"] = tables.parse_mac_count(text)
+        if (note := _mac_count_note(data.get("total_reported"), data["count"])) is not None:
+            data["count_note"] = note
     return _respond(tool, params, reads, data, include_raw=include_raw)
+
+
+def _mac_count_note(total: int | None, counts: dict[str, int]) -> str | None:
+    """Explain a gap between the listed entries and the device's count.
+
+    Live check 0.3.0: the table listed 54 entries (its own footer said 54)
+    while 'show mac-address-table count' reported 85 dynamic unicast
+    addresses. The listing was complete (footer present), so the device
+    counts differently (e.g. aged or internal entries); the tool reports
+    both instead of guessing."""
+    dynamic = [value for label, value in counts.items() if "dynamic" in label.lower()]
+    if total is None or not dynamic or max(dynamic) == total:
+        return None
+    return (
+        f"show mac-address-table lists {total} entries, show mac-address-table "
+        f"count reports {max(dynamic)} dynamic addresses. The listing ended with "
+        "the device's own total line, so this is the device's counting, not "
+        "missing pages."
+    )
 
 
 def lldp_neighbors(include_raw: bool = False) -> str:
@@ -412,8 +456,10 @@ def _source(source: str) -> str:
 
 
 def config_read(source: str = "running") -> str:
-    """Return the masked running- or startup-config (secrets replaced by
-    [REDACTED] / [REDACTED-LINE]). The show tool keeps both denied."""
+    """Return the masked running-config ('show current running-config';
+    secrets replaced by [REDACTED] / [REDACTED-LINE]). source='startup'
+    answers 'Not available': the LGS CLI cannot show the startup-config.
+    The show tool keeps both denied."""
     tool = "config_read"
     params = {"source": source}
     try:
@@ -421,6 +467,8 @@ def config_read(source: str = "running") -> str:
         configs, _ = _config_reads([source])
     except ValidationError as exc:
         return fail(tool, params, f"Rejected: {exc}", allowed=False)
+    except ConfigUnavailableError as exc:
+        return fail(tool, params, f"Not available: {exc}", allowed=True)
     except SwitchConnectionError as exc:
         return fail(tool, params, f"Error: {exc}", allowed=True)
     text = configs[source]
@@ -434,9 +482,10 @@ def config_read(source: str = "running") -> str:
 
 
 def config_backup(source: str = "running", tag: str | None = None) -> str:
-    """Store the masked config under SWITCH_BACKUP_DIR as
-    YYYY-MM-DD_HHMM_<source>[_tag].cfg; returns path, SHA256 and the diff
-    to the previous backup of the same source."""
+    """Store the masked running-config under SWITCH_BACKUP_DIR as
+    YYYY-MM-DD_HHMM_running[_tag].cfg; returns path, SHA256 and the diff
+    to the previous running backup. source='startup' is not available on
+    this device."""
     tool = "config_backup"
     params = {"source": source, "tag": tag}
     try:
@@ -447,6 +496,8 @@ def config_backup(source: str = "running", tag: str | None = None) -> str:
         stored = configstore.store_backup(configs[source], source, tag=tag)
     except ValidationError as exc:
         return fail(tool, params, f"Rejected: {exc}", allowed=False)
+    except ConfigUnavailableError as exc:
+        return fail(tool, params, f"Not available: {exc}", allowed=True)
     except SwitchConnectionError as exc:
         return fail(tool, params, f"Error: {exc}", allowed=True)
     except OSError as exc:
@@ -454,32 +505,74 @@ def config_backup(source: str = "running", tag: str | None = None) -> str:
     return ok(tool, params, to_json(stored))
 
 
+SAVED_TAG = "pre-save"
+
+
+def last_saved_copy() -> tuple[str | None, str | None]:
+    """(path, masked text) of the newest running-config copy stored by
+    save_config (tag pre-save), or (None, None)."""
+    path = configstore.latest_backup("running", tag=SAVED_TAG)
+    if path is None:
+        return None, None
+    try:
+        return str(path), path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return str(path), None
+
+
 def config_diff() -> str:
-    """Unsaved changes: masked diff startup-config -> running-config plus the
-    Config Save Status from show system information."""
+    """Unsaved changes, as far as this device allows: the startup-config
+    cannot be read, so the masked running-config is diffed against the copy
+    save_config stored at the last save through this server (tag pre-save
+    in SWITCH_BACKUP_DIR). Also returns the Config Save Status from show
+    system information. Saves done outside this server are not seen."""
     tool = "config_diff"
     params: dict[str, Any] = {}
     try:
-        configs, system = _config_reads(["startup", "running"], with_system=True)
+        configs, system = _config_reads(["running"], with_system=True)
     except (ValidationError, SwitchConnectionError) as exc:
         return fail(tool, params, f"Error: {exc}", allowed=True)
-    diff = configstore.unified_diff(
-        configs["startup"], configs["running"], before_label="startup-config",
-        after_label="running-config",
-    )
-    data = {
-        "unsaved_changes": bool(diff),
+    baseline_path, baseline = last_saved_copy()
+    data: dict[str, Any] = {
+        "startup_config": "not readable on this device",
+        "baseline": baseline_path,
         "config_save_status": tables.parse_system_information(system or "")["config_save_status"],
-        "diff": diff,
     }
+    if baseline is None:
+        data["unsaved_changes"] = None
+        data["diff"] = None
+        data["note"] = (
+            "No running-config copy from a save_config call yet; only the "
+            "Config Save Status is available. The next save_config "
+            "(dry_run=false) stores the baseline."
+        )
+    else:
+        diff = configstore.unified_diff(
+            baseline, configs["running"], before_label="last save (pre-save copy)",
+            after_label="running-config",
+        )
+        data["unsaved_changes"] = bool(diff)
+        data["diff"] = diff
+        data["note"] = (
+            "Baseline is the running-config stored by the last save_config "
+            "through this server; saves made elsewhere are not seen."
+        )
     return ok(tool, params, to_json(data))
 
 
 # ------------------------------------------------------------ audit_tail
 
 
+UNFINISHED = (
+    "unfinished: no result recorded (hub timeout such as MCP -32001, "
+    "cancelled call, server restart, or still running)"
+)
+
+
 def audit_tail(n: int = 50) -> str:
-    """Last n (1..500) audit log entries (JSON lines), redacted again on read."""
+    """Last n (1..500) audit log entries (JSON lines), redacted again on read.
+    A call that has a start record but no result (hub timeout, restart)
+    is listed with result 'unfinished'."""
     tool = "audit_tail"
     params = {"n": n}
     try:
@@ -492,9 +585,10 @@ def audit_tail(n: int = 50) -> str:
     path = Path(path_str).expanduser()
     if not path.is_file():
         return ok(tool, params, to_json({"path": str(path), "entries": []}))
-    entries: list[Any] = []
+    records: list[Any] = []
+    # Start records are folded into their results, so read more lines.
     with open(path, encoding="utf-8", errors="replace") as handle:
-        for line in deque(handle, maxlen=n):
+        for line in deque(handle, maxlen=2 * n + 20):
             line = redact_secrets(line.strip())
             if not line:
                 continue
@@ -502,9 +596,26 @@ def audit_tail(n: int = 50) -> str:
                 record = json.loads(line)
             except ValueError:
                 record = {"unparsed": redact_device_text(line)}
-            entries.append(record)
-    # Not audited as a write; still recorded so reads of the log are visible.
-    return ok(tool, params, to_json({"path": str(path), "entries": entries}))
+            records.append(record)
+    finished = {
+        record.get("call_id")
+        for record in records
+        if isinstance(record, dict) and record.get("call_id") and record.get("phase") != "start"
+    }
+    entries: list[Any] = []
+    for record in records:
+        if isinstance(record, dict) and record.get("phase") == "start":
+            if record.get("call_id") in finished:
+                continue
+            record = {
+                "time": record.get("time"),
+                "tool": record.get("tool"),
+                "call_id": record.get("call_id"),
+                "result": UNFINISHED,
+            }
+        entries.append(record)
+    # Recorded like every call, after the entries above were read.
+    return ok(tool, params, to_json({"path": str(path), "entries": entries[-n:]}))
 
 
 # ------------------------------------------------------------- show_help
@@ -534,7 +645,7 @@ def show_help(prefix: str = "") -> str:
         return fail(tool, params, f"Rejected: {exc}", allowed=False)
     except SwitchConnectionError as exc:
         return fail(tool, params, f"Error: {exc}", allowed=True)
-    data = {"typed": f"{line} ?", "help": redact_device_text(text)}
+    data = {"typed": f"{line} ?", "help": redact_device_text(text, help_listing=True)}
     return ok(tool, params, to_json(data))
 
 

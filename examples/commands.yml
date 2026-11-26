@@ -1,5 +1,5 @@
 # Example show whitelist for the `show` tool.
-# Validation is performed by netmiko-mcp 0.3.0 (default-deny; deny wins).
+# Validation is performed by netmiko-mcp (default-deny; deny wins).
 # Config actions never go through this file; they use the fixed wrapper tools.
 # Changes take effect only after a server restart (lru_cache).
 allowed_commands:
@@ -57,8 +57,9 @@ allowed_commands:
   - show access-lists
   - show access-lists *
   - show port-isolation status
-  - show monitor
-  - show monitor *
+  # Bare "show monitor" is incomplete on the LGS (live check 0.3.0).
+  - show monitor all
+  - show monitor session *
   - show ip dns name-server
   - show clock properties
   - show dot1x
@@ -69,7 +70,8 @@ allowed_commands:
   - show rmon
   - show rmon *
   - show qos global info
-  - show priority-map
+  # Bare "show priority-map" is incomplete on the LGS (live check 0.3.0).
+  - show priority-map in-priority-type
   - show class-policy
   - show scheduler
   - show ip igmp snooping
@@ -81,7 +83,14 @@ allowed_commands:
   - show ipv6 route
   - show cli
   - show history
+  # 0.3.1: environment and load (live check 0.3.0; there is no show env*,
+  # show cpu* or show memory*). Used by health_summary.
+  - show device temperature
+  - show system fan
+  - show system utilization
 denied_commands:
+  # Not a valid LGS command (live check 0.3.0: "% Invalid Command").
+  - show version
   # Active tests / secrets / config dumps
   - show interface cable-diag*
   # Broader SNMP dumps stay denied (deny wins). Do not add show snmp*.
@@ -93,6 +102,9 @@ denied_commands:
   # other radius show stays denied.
   - show radius statistics*
   - show radius server *
+  # The running-config ("show current running-config") is only read by
+  # config_read/config_backup/config_diff and the write snapshots, never by
+  # the show tool. The LGS has no show command for the startup-config.
   - show running-config*
   - show current*
   - show startup-config*

@@ -169,7 +169,6 @@ def test_password_redacted_from_connection_error() -> None:
     with patch(
         "netmiko_mcp_linksys.connection.ConnectHandler",
         side_effect=RuntimeError("auth failed for dummy-password-not-real"),
-    ):
-        with pytest.raises(SwitchConnectionError, match=r"\*\*\*") as excinfo:
-            run_show("show system information")
+    ), pytest.raises(SwitchConnectionError, match=r"\*\*\*") as excinfo:
+        run_show("show system information")
     assert "dummy-password-not-real" not in str(excinfo.value)
