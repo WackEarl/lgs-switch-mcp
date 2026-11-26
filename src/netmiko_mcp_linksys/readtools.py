@@ -57,7 +57,7 @@ SHOW_LLDP = "show lldp neighbors"
 SHOW_MAC = "show mac-address-table"
 SHOW_MAC_COUNT = "show mac-address-table count"
 SHOW_TEMPERATURE = "show device temperature"
-SHOW_FAN = "show system fan"
+SHOW_FAN = "show system fan status"
 SHOW_UTILIZATION = "show system utilization"
 ENVIRONMENT_SHOWS = {
     "temperature": SHOW_TEMPERATURE,
@@ -125,7 +125,7 @@ def health_summary(log_entries: int = 10, include_raw: bool = False) -> str:
     """Daily health view in one session, as JSON: uptime, config save status,
     PoE budget/consumption, ports up/down with speed/duplex, only ports with
     error/discard counters > 0, the last log entries, and temperature, fan
-    and CPU/memory load (show device temperature, show system fan, show
+    and CPU/memory load (show device temperature, show system fan status, show
     system utilization) when the allowlist has them."""
     tool = "health_summary"
     params = {"log_entries": log_entries, "include_raw": include_raw}

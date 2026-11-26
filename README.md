@@ -208,7 +208,7 @@ redacted device text where offered):
 
 | Tool | Reads |
 | --- | --- |
-| `health_summary(log_entries=10)` | One session: `show system information` (uptime, Config Save Status), `show power detail` (budget, consumption), `show power inline` (W per port), `show interfaces status` (up/down, speed, duplex), `show interfaces counters` (only ports with error/discard counters > 0), `show logging` (last entries); `show device temperature`, `show system fan`, `show system utilization` (0.3.1, `environment`, only if allow-listed). |
+| `health_summary(log_entries=10)` | One session: `show system information` (uptime, Config Save Status), `show power detail` (budget, consumption), `show power inline` (W per port), `show interfaces status` (up/down, speed, duplex), `show interfaces counters` (only ports with error/discard counters > 0), `show logging` (last entries); `show device temperature`, `show system fan status`, `show system utilization` (0.3.1, `environment`, only if allow-listed). |
 | `port_status()` | Per port: link, speed, duplex, description, VLANs, PoE (W/class/status), LLDP neighbor. |
 | `port_counters(port?)` | `show interfaces counters`, all ports or one. |
 | `counters_delta(port?)` | Difference since the previous call (baseline in `SWITCH_STATE_DIR`); `new_errors` lists growing error/discard counters. The first call stores the baseline. |
@@ -674,8 +674,9 @@ Fixes from the first live check of 0.3.0 on the LGS328PC (firmware
 2. `config_backup()`, then `config_diff()` (no baseline yet: only the status).
 3. `poe_status`, `health_summary`, `port_status` with `include_raw=true`:
    PoE ports, VLANs and `environment` filled, `parse_warnings` empty.
-4. `show monitor all`, `show priority-map in-priority-type`, `show device
-   temperature`, `show system fan`, `show system utilization`; `show
+4. `show monitor all`, `show priority-map in-priority-type vlanPri` (and
+   `ipDscp`), `show device temperature`, `show system fan status`, `show
+   system utilization`; `show
    version` is refused.
 5. `show_help("")`: no `[REDACTED-LINE]` between `security-suite` and
    `snmp-server`.

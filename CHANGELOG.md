@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Allowlist (`examples/commands.yml`): `show priority-map in-priority-type`
+  and `show system fan` answered `% Incomplete command.` on the LGS328PC
+  (retest 0.3.1). Now `show priority-map in-priority-type vlanPri` and
+  `show priority-map in-priority-type ipDscp` (Linksys LGSxxx CLI User
+  Manual, QoS) and `show system fan status`; `health_summary` reads the
+  fan status with `show system fan status`.
+
 ## [0.3.1] - 2026-11-26
 
 Fixes from the first live check of 0.3.0 (LGS328PC, firmware 1.01.02.02,
