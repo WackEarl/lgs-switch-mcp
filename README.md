@@ -10,10 +10,21 @@ same allow/deny list format (`commands.yml`). Configuration tools send only
 fixed command sequences built by this wrapper; the model never supplies
 free-form config.
 
-**This is 0.2.0.** It adds narrow, unlock-gated SNMP tools (a
-column-only write view, a tool-level lock on the protected ports, and
-`SWITCH_SNMP_WRITE_ENABLED` off by default) and includes the fixes from
-the live tests on an
+**This is 0.3.0.** It adds parsed JSON read tools (`health_summary`,
+`port_status`, `port_counters`, `counters_delta`, `mac_table`,
+`lldp_neighbors`, `poe_status`), masked config reads and backups
+(`config_read`, `config_backup`, `config_diff`), `audit_tail`,
+`show_help`, and narrow write tools (port security, storm control, rate
+limit, PoE cycle, cable diagnostics, syslog target, management services,
+clear counters, system identity). Every write tool defaults to
+`dry_run=true`, takes a masked running-config snapshot before a real
+write, checks device output for `%` and returns a before/after diff.
+Device text is redacted fail-closed, line by line. Protected ports are
+refused by every new port write tool; caution ports need an explicit
+confirmation. See [What is new in 0.3.0](#what-is-new-in-030) and
+[Live test 0.3.0](#live-test-030-network-admin).
+
+0.2.0 added the unlock-gated SNMP tools; 0.1.x was live-tested on an
 LGS328PC with firmware 1.01.02.02 (SSH with `ssh-rsa` via paramiko 4.0.0;
 login lands directly in privilege 15 with prompt `LGS328PC#`; no banner or
 second login prompt). See [Live-test status](#live-test-status).
@@ -24,7 +35,7 @@ The intended way to run this server is the packaged entrypoint, pinned to a
 tag:
 
 ```bash
-uvx --from git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.2.0 netmiko-mcp-linksys
+uvx --from git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.0 netmiko-mcp-linksys
 ```
 
 From a local checkout:
@@ -43,7 +54,7 @@ A compatibility shim, `lgs_mcp.py`, exists only for the older hub invocation
 `python /config/netmiko/lgs_mcp.py`. That file is not a standalone
 implementation: it imports `netmiko_mcp_linksys`. Prefer the `uvx --from ...
 netmiko-mcp-linksys` entry above. If you must keep the old command, add
-`--with git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.2.0` so the
+`--with git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.0` so the
 package is installed in that environment.
 
 ## Environment variables
@@ -57,8 +68,13 @@ package is installed in that environment.
 | `SWITCH_SNMP_WRITE_ENABLED` | yes (`1`) before any SNMP write tool | Hard gate, **off by default**. SNMP write tools refuse unless this is exactly `1`. Leave it unset until the remaining unconfirmed CLI (community create/remove) has been verified live. |
 | `SWITCH_DEVICE_TYPE` | no | netmiko device type. Default: `cisco_s300`. |
 | `SWITCH_KNOWN_HOSTS` | yes (at tool call) | Path to an OpenSSH `known_hosts` file with the switch host key. System host keys are not used. |
-| `SWITCH_PROTECTED_PORTS` | yes before any disable / PoE-off | Comma-separated ports (e.g. `0/24,0/25`) that may not be shut down or have PoE disabled. If this variable is unset, empty, or contains an invalid port, disable and PoE-off fail closed (every port is refused). Enabling a port is still allowed. |
-| `NETMIKO_MCP_COMMAND_FILE` | yes for `show` and `port_overview` | Path to a `commands.yml` allow/deny list. See `examples/commands.yml`. Restart the server after edits (`lru_cache`). |
+| `SWITCH_PROTECTED_PORTS` | yes before any port write | Comma-separated ports (e.g. `0/10,0/24`). `port_disable` and `poe_disable` refuse them; every other port write tool except `port_set_description`, `port_enable` and `poe_enable` refuses them in every direction (`port_security_set`, `storm_control_set`, `rate_limit_set`, `poe_cycle`, `cable_diag`, `clear_counters(port)`). If this variable is unset, empty, or contains an invalid port, those tools fail closed (every port is refused). |
+| `SWITCH_CAUTION_PORTS` | no | Comma-separated ports (e.g. `0/15`) where port write tools (except `port_set_description`) need `confirm_caution_port=true`. The flag is recorded in the audit log. Unset means no caution ports; an invalid entry refuses all port writes (fail-closed). |
+| `SWITCH_SYSLOG_ALLOWED` | yes before `syslog_set` | Comma-separated IPv4 addresses that `syslog_set` may configure as a syslog target. There is no free value: unset, empty, or invalid refuses `syslog_set`. |
+| `SWITCH_BACKUP_DIR` | no | Directory for masked config backups and pre-write snapshots. Default `/data/netmiko/backups` (created with mode `0700`, files `0600`). |
+| `SWITCH_STATE_DIR` | no | Directory for small state files (`counters_delta` baseline). Default `/data/netmiko/state`. |
+| `SWITCH_PRE_WRITE_SNAPSHOT` | no | `required` (default): a real write first stores a masked running-config snapshot and is refused if that fails. `best-effort`: write anyway and report the failure. `off`: no snapshot. `save_config` backs up the current startup-config under the same rule. |
+| `NETMIKO_MCP_COMMAND_FILE` | yes for `show`, `port_overview` and the parsed read tools | Path to a `commands.yml` allow/deny list. See `examples/commands.yml`. Restart the server after edits (`lru_cache`). |
 | `SWITCH_AUDIT_LOG` | no (recommended) | If set, append one JSON line per tool call. The file is created with mode `0600`. Passwords are redacted from parameters and results. There is no default path; unset means no audit (warned at startup). An unwritable path does not break tools: a warning goes to stderr and the result gets an `audit_warning:` line. |
 | `SWITCH_READ_TIMEOUT` | no | Seconds without new output before a command is given up. Also passed to netmiko as `read_timeout_override`. Default `60`, range `1`–`600`. |
 | `SWITCH_PAGING_OFF` | no | `1` (default) sends `configure terminal` / `set cli pagination off` / `end` at session start, best effort. `0` skips it; the pager loop handles paging either way. |
@@ -68,10 +84,12 @@ Python 3.12 or newer is required.
 
 ## mcp-hub entry snippet
 
-Secrets stay in hub template variables. Write tools that can persist or
-widen device access (`save_config` and the SNMP tools) are gated by the
-hub `unlock` feature (0.12+); `maxMinutes: 0` means every call needs a
-fresh approval. Keep `SWITCH_SNMP_WRITE_ENABLED` unset (the tools refuse)
+Secrets stay in hub template variables. Write tools are gated by the hub
+`unlock` feature (0.12+); `maxMinutes: 0` means every call needs a fresh
+approval. See [Unlock classes](#unlock-classes-proposal) for the
+proposed per-tool classes; the snippet below gates every write tool with
+`maxMinutes: 0`, which is the safe default for a hub that supports only
+one unlock block per server. Keep `SWITCH_SNMP_WRITE_ENABLED` unset (the tools refuse)
 until the community-create syntax has been confirmed live; only then set it to `1` in the
 hub env (shown below as the value to use after that confirmation). Fill `SWITCH_PROTECTED_PORTS` after the first read test —
 until it is set to a valid list, disable and PoE-off are refused.
@@ -82,7 +100,7 @@ until it is set to a valid list, disable and PoE-off are refused.
     "command": "uvx",
     "args": [
       "--python", "3.12",
-      "--from", "git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.2.0",
+      "--from", "git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.0",
       "netmiko-mcp-linksys"
     ],
     "env": {
@@ -94,6 +112,11 @@ until it is set to a valid list, disable and PoE-off are refused.
       "SWITCH_DEVICE_TYPE": "cisco_s300",
       "SWITCH_KNOWN_HOSTS": "/config/netmiko/known_hosts",
       "SWITCH_PROTECTED_PORTS": "<uplink and management ports, e.g. 0/24>",
+      "SWITCH_CAUTION_PORTS": "<ports that need confirm_caution_port, e.g. 0/15>",
+      "SWITCH_SYSLOG_ALLOWED": "<syslog receiver IPv4, e.g. 192.0.2.20>",
+      "SWITCH_BACKUP_DIR": "/data/netmiko/backups",
+      "SWITCH_STATE_DIR": "/data/netmiko/state",
+      "SWITCH_PRE_WRITE_SNAPSHOT": "required",
       "NETMIKO_MCP_COMMAND_FILE": "/config/netmiko/commands.yml",
       "SWITCH_AUDIT_LOG": "/data/netmiko/switch-audit.log",
       "SWITCH_READ_TIMEOUT": "60",
@@ -106,11 +129,22 @@ until it is set to a valid list, disable and PoE-off are refused.
     "unlock": {
       "tools": [
         "save_config",
+        "mgmt_services_set",
         "snmp_view_create",
         "snmp_write_view_create",
         "snmp_community_create",
         "snmp_community_remove",
-        "snmp_user_remove"
+        "snmp_user_remove",
+        "port_disable",
+        "poe_disable",
+        "poe_cycle",
+        "port_security_set",
+        "storm_control_set",
+        "rate_limit_set",
+        "cable_diag",
+        "syslog_set",
+        "clear_counters",
+        "system_identity_set"
       ],
       "maxMinutes": 0
     }
@@ -119,7 +153,29 @@ until it is set to a valid list, disable and PoE-off are refused.
 ```
 
 Paths under `/config` are read-only inside the hub container; put the audit
-log (and an optional `SWITCH_SESSION_LOG`) under `/data`.
+log, the backup and state directories (and an optional
+`SWITCH_SESSION_LOG`) under `/data`.
+
+Free (not gated): `show`, `port_overview`, all parsed read tools,
+`config_read`, `config_backup`, `config_diff`, `audit_tail`, `show_help`,
+`port_set_description`, `port_enable`, `poe_enable`.
+
+### Unlock classes (proposal)
+
+The hub locks per tool, not per parameter; that is why 0.3.0 splits
+`port_set_admin_state` / `poe_set` into enable and disable tools. Proposed
+classes for the hub entry (needs a hub that supports more than one
+unlock block per server; until then use `maxMinutes: 0` for all):
+
+| Class | Tools |
+| --- | --- |
+| Free | all read tools except `cable_diag`; `port_set_description`, `port_enable`, `poe_enable` |
+| Unlock, short slot (about 15 minutes) | `syslog_set`, `port_security_set`, `storm_control_set`, `poe_cycle`, `cable_diag`, `clear_counters`, `system_identity_set`, `rate_limit_set`, `port_disable`, `poe_disable` |
+| Unlock, `maxMinutes: 0` (every call) | `save_config`, `mgmt_services_set`, the five SNMP tools |
+
+A dry run of a gated tool also needs the unlock, because the hub cannot
+see the `dry_run` parameter. That is intended: the dry run reads the
+device.
 
 Copy `examples/commands.yml` to `NETMIKO_MCP_COMMAND_FILE`. Create
 `SWITCH_KNOWN_HOSTS` yourself from a verified host key; do not use
@@ -131,15 +187,55 @@ Copy `examples/commands.yml` to `NETMIKO_MCP_COMMAND_FILE`. Create
 | --- | --- | --- |
 | `show(command)` | Allow-listed show command via `netmiko_mcp.security.validate_command`, then `send_command`. Pipe, semicolon, and newlines are rejected. Deny wins. | n/a |
 | `port_overview()` | Read-only bundle of `show system information`, `show vlan`, `show power inline`, and `show interfaces`, each passed through the same command filter, run in one SSH session. If one command fails, the remaining ones are not sent and are listed as not run. | n/a |
-| `port_set_admin_state(port, enabled)` | `interface gigabitethernet 0/N` then `no shutdown` / `shutdown`. | no |
-| `poe_set(port, enabled)` | `interface gigabitethernet 0/N` then `power inline enable` / `power inline disable`. PoE ports: `0/1`–`0/24`. | no |
-| `port_set_description(port, text?)` | `description "<text>"` (always quoted, the LGS CLI takes only one word unquoted) or `no description` when `text` is omitted. The result ends with an informational read-back of `show interfaces description` for that port (verified, quoted, empty, probably truncated, or could not verify). | no |
-| `save_config()` | Privileged exec `save` only. Gate this in the hub with `unlock`. | yes |
+| `port_enable(port, confirm_caution_port=False, dry_run=True)` | `interface gigabitethernet 0/N` then `no shutdown`. Allowed on protected ports. Replaces `port_set_admin_state(enabled=True)`. | no |
+| `port_disable(port, confirm_caution_port=False, dry_run=True)` | `interface gigabitethernet 0/N` then `shutdown`. Protected ports refused (fail-closed). Replaces `port_set_admin_state(enabled=False)`. | no |
+| `poe_enable(port, …)` / `poe_disable(port, …)` | `power inline enable` / `power inline disable`. PoE ports: `0/1`–`0/24`. `poe_disable` refuses protected ports. Replace `poe_set`. | no |
+| `port_set_description(port, text?, dry_run=True)` | `description "<text>"` (always quoted, the LGS CLI takes only one word unquoted) or `no description` when `text` is omitted. Allowed on every port. The result includes an informational read-back note (verified, quoted, empty, probably truncated, or could not verify). | no |
+| `save_config(dry_run=True)` | Dry run: masked diff startup → running and the `Config Save Status`. Real: backs up the current startup-config (masked), sends privileged exec `save`, returns the diff of the old and new startup-config and the `Config Save Status`. Gate with hub `unlock`. | yes |
 | `snmp_view_create(view_name, subtree)` | Add one **included** subtree from a fixed OID allowlist (`interfaces`, `ifmib`, `power-ethernet`) to a **read** view. Refused for a view that is used as a write view or holds a writable column or an excluded entry. Gate with hub `unlock` and `SWITCH_SNMP_WRITE_ENABLED=1`. **Not live-confirmed.** | no |
 | `snmp_write_view_create(view_name, subtree)` | Add one writable column to a **write** view: `ifAdminStatus` (`1.3.6.1.2.1.2.2.1.7`), `ifAlias` (`1.3.6.1.2.1.31.1.1.1.18`) or `pethPsePortAdminEnable` (`1.3.6.1.2.1.105.1.1.1.3`, PoE on/off). One `snmp view <view> <column> included` line, sent with a `%` error check and verified in `show snmp viewtree`; on failure it is removed again (see below). Whole MIB subtrees are never allowed. **No per-port exclusions:** the column is writable for every port, protected ports included. Gate with hub `unlock` and `SWITCH_SNMP_WRITE_ENABLED=1`. **Create and viewtree read-back live-confirmed; rollback (`no snmp view`) is not.** | no |
 | `snmp_community_create(view_name, access, write_view=None)` | Create a v2c community from `SWITCH_SNMP_COMMUNITY` bound to an existing restricted read view (`view_name`). `ro`: write view `none`. `rw`: requires a separate `write_view` that passes the write-view check (only writable columns). The secret is never a tool argument. Gate with hub `unlock` and `SWITCH_SNMP_WRITE_ENABLED=1`. **Not live-confirmed.** | no |
 | `snmp_community_remove(name)` | Remove `public` or `private` only, and only after the configured community is verified present with a restricted view. Never removes the configured community. Gate with hub `unlock` and `SWITCH_SNMP_WRITE_ENABLED=1`. **Not live-confirmed.** | no |
 | `snmp_user_remove(name)` | Remove `noAuthUser` only. Gate with hub `unlock` and `SWITCH_SNMP_WRITE_ENABLED=1`. **Not live-confirmed.** | no |
+
+All SNMP tools also take `dry_run=True` (default): the read-only
+prechecks run and the commands of the first configuration step are
+returned; nothing is sent.
+
+New in 0.3.0, read-only (JSON output, `include_raw=true` adds the
+redacted device text where offered):
+
+| Tool | Reads |
+| --- | --- |
+| `health_summary(log_entries=10)` | One session: `show system information` (uptime, Config Save Status), `show power detail` (budget, consumption), `show power inline` (W per port), `show interfaces status` (up/down, speed, duplex), `show interfaces counters` (only ports with error/discard counters > 0), `show logging` (last entries). |
+| `port_status()` | Per port: link, speed, duplex, description, VLANs, PoE (W/class/status), LLDP neighbor. |
+| `port_counters(port?)` | `show interfaces counters`, all ports or one. |
+| `counters_delta(port?)` | Difference since the previous call (baseline in `SWITCH_STATE_DIR`); `new_errors` lists growing error/discard counters. The first call stores the baseline. |
+| `mac_table(port?, mac?)` | `show mac-address-table` and `count`, filtered by port or MAC. |
+| `lldp_neighbors()` | `show lldp neighbors`. |
+| `poe_status()` | `show power detail` and `show power inline`. |
+| `config_read(source="running")` | Masked `show running-config` / `show startup-config`. Both stay denied for `show`. |
+| `config_backup(source="running", tag?)` | Stores the masked config as `SWITCH_BACKUP_DIR/YYYY-MM-DD_HHMM_<source>[_tag].cfg`; returns path, SHA256 and the diff to the previous backup of that source. |
+| `config_diff()` | Unsaved changes: masked diff startup → running plus `Config Save Status`. |
+| `audit_tail(n=50)` | Last `n` (1–500) audit entries, redacted again on read. |
+| `show_help(prefix="")` | Types `show <prefix> ?`, reads the help listing, clears the line with Ctrl-U. Nothing is executed. `prefix`: up to five words from `[a-z0-9-]`. |
+
+New in 0.3.0, writes (all `dry_run=True` by default, none saves):
+
+| Tool | CLI (LGS ISS manual) |
+| --- | --- |
+| `port_security_set(port, limit?, …)` | `port-security <1-256>` / `no port-security` (interface). Read-back `show interface port-security gigabitethernet 0/N`. |
+| `storm_control_set(port, storm_type, level_pps?, …)` | `storm-control {broadcast\|unknown-multicast\|dlf} level <pps>` / `no storm-control <type> level`. Read-back: the interface block of the masked running-config. |
+| `rate_limit_set(port, direction, kbps?, …)` | `rate-limit {input\|output} <1-80000000>` / `no rate-limit <direction>`. Read-back: interface block. |
+| `poe_cycle(port, off_seconds=5, …)` | `power inline disable`, wait 2–60 s, `power inline enable`, in one session. PoE is switched on again in a `finally`, with one retry in a new session; if both fail the result says the port may be left disabled. |
+| `cable_diag(port, …)` | `show interface cable-diag gigabitethernet 0/N` (stays denied for `show`). Active test: may drop the link for a few seconds. |
+| `syslog_set(server_ip, port=514, facility="local0", severity="informational", enabled=True)` | `logging-server facility <f> severity <s> ipv4 <ip> port <p>`, `logging-service enable`, `logging severity <s>`; `enabled=false` sends `no logging-server …` with the same arguments. `server_ip` only from `SWITCH_SYSLOG_ALLOWED`. Severity keywords: `emergencies`, `alerts`, `critical`, `errors`, `warnings`, `notification`, `informational`, `debugging`. |
+| `mgmt_services_set(http?, https?, disable_telnet=False)` | `set ip http {enable\|disable}`, `ip http secure server` / `no ip http secure server`, `no ip telnet service`. SSH cannot be changed, Telnet cannot be enabled. HTTP is disabled only after HTTPS reads back `Enabled` in the same session; HTTP and HTTPS cannot both be disabled in one call. |
+| `clear_counters(port?, …)` | Privileged exec `clear counters [gigabitethernet 0/N]`. Resets the `counters_delta` baseline. |
+| `system_identity_set(location?, contact?, name?)` | `system location`, `system contact` (values `[A-Za-z0-9 ._-]`, quoted when they contain a space), `set switch-name` (no spaces; sent last, the prompt is re-detected). |
+
+Port write tools take `confirm_caution_port` (see `SWITCH_CAUTION_PORTS`).
+Single ports only; `interface range` is not supported.
 
 There are no VLAN, reboot, or reset tools.
 
@@ -160,9 +256,24 @@ own quoting cannot be broken out of.
   `set cli pagination off` at session start (see [Paging](#paging)).
 - **No VLAN, reboot, or reset tools.**
 - **Protected ports, fail-closed.** `SWITCH_PROTECTED_PORTS` blocks
-  `port_set_admin_state(enabled=False)` and `poe_set(enabled=False)` on those
-  ports. Enabling is still allowed. If the variable is unset, empty, or
-  contains an invalid port identifier, every disable / PoE-off is refused.
+  `port_disable` and `poe_disable`, and every direction of the other port
+  write tools (port security, storm control, rate limit, PoE cycle, cable
+  diagnostics, clear counters on a named port). `port_enable`,
+  `poe_enable` and `port_set_description` stay allowed. If the variable is
+  unset, empty, or contains an invalid port identifier, those tools refuse
+  every port.
+- **Caution ports.** `SWITCH_CAUTION_PORTS` ports need
+  `confirm_caution_port=true` for every port write except the description;
+  the flag is in the audit log.
+- **Dry run by default.** Every write tool (including `save_config` and the
+  SNMP tools) defaults to `dry_run=true`: it returns the exact CLI lines,
+  the current state and the expected state, and sends nothing.
+- **Snapshot, error check, diff.** A real write stores a masked
+  running-config snapshot first (`SWITCH_PRE_WRITE_SNAPSHOT`; not for
+  `poe_cycle`, `cable_diag` and `clear_counters`, which leave the config
+  unchanged), sends with
+  `%` as netmiko `error_pattern` (it stops at the first rejected line),
+  reads the state back and returns a before/after diff.
 - **Host-key pinning.** `ssh_strict=True`, `system_host_keys=False`,
   `use_keys=False`, `allow_agent=False`, key file from `SWITCH_KNOWN_HOSTS`.
 - **No connection at startup.** Missing or dummy environment is enough for
@@ -172,9 +283,21 @@ own quoting cannot be broken out of.
   `save_config`. In the hub, `save_config` and the SNMP write tools
   must be gated by `unlock`.
 - **Audit log** records time, tool, parameters, allow/deny, and a short
-  result. Passwords are redacted from parameters, results, and error text
-  (`***`). The SNMP community (`SWITCH_SNMP_COMMUNITY`) is redacted as
-  `[REDACTED]`, including `show snmp community` listings.
+  result (`ok`, `dry run`, or the error). Passwords are redacted from
+  parameters, results, and error text (`***`). The SNMP community
+  (`SWITCH_SNMP_COMMUNITY`) is redacted as `[REDACTED]`, including
+  `show snmp community` listings.
+- **Fail-closed redaction of device text** (0.3.0). On top of the exact
+  secrets above, all device output (tool results, config backups and
+  snapshots, error text, session log) goes through line rules: PEM blocks
+  and long key blobs are removed; `snmp community|targetparams|group|user`
+  lines keep only their keywords (SNMPv3 auth/priv keys masked);
+  `password|secret|key <value>` is masked to the end of the line;
+  `Label : value` lines whose label names a secret keep only status
+  vocabulary (Enabled, MD5, None, …). Any other line that still contains
+  `password|key|secret|community|auth|priv` is replaced by
+  `[REDACTED-LINE]`. `show radius server` is strict: only `Label : value`
+  lines survive. Parsers run on redacted text.
   Audit failures never abort a tool; they are reported on stderr and as an
   `audit_warning:` line in the result.
 - **paramiko 4.0.0** for `ssh-rsa`/SHA-1 host keys. Do not bump to 5.x
@@ -349,7 +472,7 @@ hex mask such as `ff:e0` for an 11-arc column is also accepted, while a
 mask with a 0 inside the OID (a wildcard, such as `ff:c0` for an 11-arc
 OID) is refused.
 
-The viewtree parser reads the layout from Redy's read-only check:
+The viewtree parser reads the layout from the network admin's read-only check:
 
 ```
 View Name    : iso
@@ -387,9 +510,11 @@ view).
 
 > **Note on 0/15:** 0/15 feeds a LINOVISION EoC converter that powers the
 > Zigbee router at the far end over PoE. Do **not** turn PoE (or the
-> port) off on 0/15, or the Zigbee router goes down. Roland decided
-> against an extra technical lock (task 48, comment 69): 0/15 is not in
-> `SWITCH_PROTECTED_PORTS`, so SNMP and the CLI tools do not block it.
+> port) off on 0/15, or the Zigbee router goes down. The owner decided
+> against a hard lock (task 48, comment 69): 0/15 is not in
+> `SWITCH_PROTECTED_PORTS`. Since 0.3.0 it can be listed in
+> `SWITCH_CAUTION_PORTS`, so the CLI port write tools need
+> `confirm_caution_port=true`; SNMP does not block it.
 > In Home Assistant its PoE and port switches should be disabled.
 
 ### SNMP and protected ports
@@ -397,12 +522,12 @@ view).
 **The protected ports are only protected at tool level.**
 `SWITCH_PROTECTED_PORTS` (production: `0/10`, which powers the Unraid
 server through a PoE splitter, and `0/24`, the uplink) is enforced by
-the tools of this server: `port_set_admin_state(..., False)` and
-`poe_set(..., False)` refuse those ports, and refuse every port if the
+the tools of this server: `port_disable`, `poe_disable` and the 0.3.0
+port write tools refuse those ports, and refuse every port if the
 variable is unset, empty or invalid (fail-closed). This server has no
 tool that writes SNMP values itself.
 
-There is **no** protection at SNMP level (Roland's decision of
+There is **no** protection at SNMP level (the owner's decision of
 2026-11-13; earlier builds excluded the protected ports in the write
 view, which needed live ifIndex / PoE index mappings). The write view
 makes `ifAdminStatus`, `ifAlias` and `pethPsePortAdminEnable` writable
@@ -414,12 +539,12 @@ the switch then needs local access to recover. Therefore:
   (Home Assistant); give everything else a read-only community;
 - keep the write view to the columns that are really used (leave out
   `pethPsePortAdminEnable` if PoE switching is not needed);
-- restrict UDP/161 at the firewall to the hosts that need it (Redy
-  handles the ACL as a separate work package); these tools set no
+- restrict UDP/161 at the firewall to the hosts that need it (the network
+  admin handles the ACL as a separate work package); these tools set no
   source-IP / `transporttag` restriction;
 - disable the HA switches for 0/10, 0/24 and 0/15.
 
-### Live-test checklist (Redy)
+### Live-test checklist (network admin)
 
 Confirmed in the 0.2.0 live check (see [Live-test status](#live-test-status)):
 
@@ -462,10 +587,80 @@ Still unconfirmed:
   command is sent by these tools) and that `snmp community` lines do
   not wrap mid-secret in a way that a later live check would miss.
 
+## What is new in 0.3.0
+
+- **Breaking:** `port_set_admin_state` and `poe_set` are replaced by
+  `port_enable` / `port_disable` and `poe_enable` / `poe_disable`, so the
+  hub can lock the disabling direction only. Every write tool, including
+  `port_set_description`, `save_config` and the SNMP tools, now defaults to
+  `dry_run=true`; callers must pass `dry_run=false` to change anything.
+  Write results are JSON.
+- New read and write tools (see [Tools](#tools)).
+- New `commands.yml` entries (read-only): `show logging-server`,
+  `show security-suite`, `show access-lists [*]`, `show port-isolation
+  status`, `show monitor [*]`, `show ip dns name-server`, `show clock
+  properties`, `show dot1x [*]`, `show radius server` (strict
+  redaction), `show rmon [*]`, `show qos global info`, `show priority-map`,
+  `show class-policy`, `show scheduler`, `show ip igmp snooping [*]`,
+  `show ipv6 mld snooping [*]`, `show voice vlan`, `show ipv6 interface`,
+  `show ipv6 route`, `show cli`, `show history`, `show ip http secure
+  server status`. `show running-config`, `show startup-config`, `show
+  current*`, cable diagnostics, other `show radius` commands and the
+  broad SNMP dumps stay denied for `show`.
+- Not included on purpose: port mirroring (an automatic removal after N
+  minutes cannot be guaranteed by a stdio server that the hub stops when
+  idle), management ACLs (lock-out risk; a click guide instead),
+  TFTP config export (only needed if `show running-config` does not exist
+  on this firmware), environment / SFP values (no CLI command in the
+  manual; find them with `show_help` first), speed/duplex, VLANs,
+  users/passwords, reboot/reset, SSH off, Telnet on, LAG/STP, `interface
+  range`, free-form config.
+
+## Live test 0.3.0 (network admin)
+
+None of the 0.3.0 commands has run on the device yet. The parsers were
+written against the manual and synthetic outputs. Check, in this order,
+and record real outputs for the tests:
+
+1. `show running-config` and `show startup-config` exist (`config_read`
+   for both). If not, real writes need `SWITCH_PRE_WRITE_SNAPSHOT=best-effort`
+   and `save_config` cannot back up or diff; consider the TFTP export.
+2. `config_read` output: no secret is visible (communities, SNMPv3 keys,
+   user passwords, RADIUS key, certificates); structure stays readable.
+3. Parsers against real output: `health_summary`, `port_status`,
+   `port_counters`, `mac_table`, `lldp_neighbors`, `poe_status` with
+   `include_raw=true`; `parse_warnings` should be empty.
+4. New `show` entries from the list above, one by one; especially that
+   `show radius server` hides the key.
+5. `show_help("")`, `show_help("interfaces")`: help listing comes back,
+   the prompt is clean afterwards, nothing is executed. Then look for
+   `show env*`, `show cpu*`, `show memory*`, `show storm-control*`,
+   `authorized-manager`.
+6. `counters_delta` twice (baseline, then delta).
+7. Dry runs of every write tool; then on a free port (e.g. 0/18), with
+   `dry_run=false`: `port_security_set` (limit, then off),
+   `storm_control_set` (then off), `rate_limit_set` (then off),
+   `poe_cycle`, `cable_diag`, `clear_counters("0/18")`. Confirm
+   the read-backs and the interface block of the running-config.
+8. `syslog_set` to the allow-listed receiver, then `enabled=false`: does
+   `no logging-server …` with the full arguments remove the entry?
+9. `system_identity_set(location=…, contact=…)`; quoting of values with
+   spaces. `name` only if a prompt change is acceptable (the prompt is
+   re-detected; a broken session afterwards would show here).
+10. `mgmt_services_set(https=true)`, check HTTPS in a browser, then
+    `mgmt_services_set(http=false)`; read-back wording of `show ip http
+    secure server status` (`Enabled`/`Disabled`).
+11. `clear_counters()` without port: does it ask for a confirmation?
+12. `save_config(dry_run=true)`, then `dry_run=false`: backup file, diff
+    and `Config Save Status`; the save prompt (#4).
+13. Protected ports: every port write tool refuses 0/10 and 0/24;
+    caution port 0/15 needs `confirm_caution_port=true`.
+14. `audit_tail` shows the calls above, without secrets.
+
 ## Live-test status
 
 Confirmed on LGS328PC, firmware 1.01.02.02, in the 0.2.0 live check
-(Redy, commit 177dc84, 2026-11-13):
+(network admin, commit 177dc84, 2026-11-13):
 
 - Device error lines start with `%` (example: `% Invalid input
   detected at '^' marker`).
@@ -477,8 +672,10 @@ Confirmed on LGS328PC, firmware 1.01.02.02, in the 0.2.0 live check
   `View Type : Included`, `Storage Type : Non-volatile` immediately
   (no `save_config`), `Row Status : Active`. `show snmp view` is an
   alias of `viewtree`.
-- `port_set_admin_state` and `poe_set` (CLI, not SNMP) worked on a
-  free port (0/18) and were reversed.
+- `port_set_admin_state` and `poe_set` (CLI, not SNMP; 0.3.0 replaces
+  them with `port_enable` / `port_disable` / `poe_enable` / `poe_disable`
+  that send the same commands) worked on a free port (0/18) and were
+  reversed.
 
 Not verified in that check:
 

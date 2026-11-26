@@ -14,7 +14,7 @@ Those variants are recorded here as unconfirmed fallbacks and are
 **not** sent by the tools.
 
 NONE of these commands have been confirmed live on the LGS328PC.
-Do not use the SNMP write tools against the switch until Redy has
+Do not use the SNMP write tools against the switch until the network admin has
 verified the syntax (see the README live-test checklist).
 """
 
@@ -77,7 +77,7 @@ from netmiko_mcp_linksys.validation import (
 # accepted as a view subtree without a mask, and how show snmp viewtree
 # prints the mask for OIDs longer than 1.
 #
-# READ-ONLY CHECK (Redy, 2026-11-13): show snmp viewtree prints key : value
+# READ-ONLY CHECK (network admin, 2026-11-13): show snmp viewtree prints key : value
 # blocks such as "Subtree OID  : 1" / "Subtree Mask : 1" /
 # "View Type    : Included" (no leading dot, no "iso.", with a mask); the
 # views on the switch are "iso" and "restricted". mask_is_exact reads such
@@ -130,10 +130,10 @@ IF_ALIAS_OID = "1.3.6.1.2.1.31.1.1.1.18"
 # .<pethPsePortGroupIndex>.<pethPsePortIndex> selects one PoE port.
 POE_ADMIN_ENABLE_OID = "1.3.6.1.2.1.105.1.1.1.3"
 
-# The only columns a *write* view may include (Task 48, Redy's plan
-# approved by Roland): port admin state, port description, PoE on/off.
+# The only columns a *write* view may include (Task 48, the network
+# admin's plan approved by the owner): port admin state, port description, PoE on/off.
 # Whole MIB subtrees stay read-view only. There are no per-port
-# exclusions (Roland, 2026-11-13): the protected ports (SWITCH_PROTECTED_PORTS)
+# exclusions (owner decision, 2026-11-13): the protected ports (SWITCH_PROTECTED_PORTS)
 # are only refused by this server's tools; anyone with the write
 # community can set these columns for every port, protected ones included.
 WRITE_ALLOWED_SUBTREES: dict[str, str] = {
@@ -401,7 +401,7 @@ _VIEW_NAME_LINE_RE = re.compile(r"(?im)^\s*view\s*name\s*:")
 def _view_records(output: str) -> list[str]:
     """Viewtree blocks: split on dashed lines and before every View Name line.
 
-    Read-only check by Redy: the switch prints ``key : value`` blocks
+    Read-only check by the network admin: the switch prints ``key : value`` blocks
     (``Subtree OID  : 1``, ``Subtree Mask : 1``, ``View Type    : Included``).
     Starting a block at each ``View Name`` line keeps entries apart even
     if blocks are separated only by blank lines.
@@ -418,7 +418,7 @@ def _view_records(output: str) -> list[str]:
 
 
 def parse_snmp_viewtree(output: str) -> list[ViewSubtree]:
-    """Parse show snmp viewtree (ISS key : value blocks, format per Redy's read check)."""
+    """Parse show snmp viewtree (ISS key : value blocks, format per the network admin's read check)."""
     entries: list[ViewSubtree] = []
     for record in _view_records(output):
         fields = _fields(record)
@@ -586,7 +586,7 @@ _OID_ARC_RE = re.compile(r"^(?:0|[1-9][0-9]*)$")
 def oid_arcs(oid: str) -> tuple[int, ...] | None:
     """Parse an OID as printed by the switch into its arcs, or None.
 
-    The one central OID normalization (Cody, review of bc96149): surrounding
+    The one central OID normalization (review of bc96149): surrounding
     whitespace, one leading dot, a leading ``iso`` arc (= 1, only when
     followed by 3) and trailing dots are accepted, so ``.1.3.6.1``,
     ``iso.3.6.1``, ``.iso.3.6.1.`` and ``1.3.6.1`` are the same OID;
