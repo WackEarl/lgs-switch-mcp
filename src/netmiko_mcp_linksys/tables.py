@@ -312,9 +312,17 @@ def _poe_tables(text: str) -> list[Table]:
 def parse_power_inline(text: str) -> tuple[dict[str, dict[str, Any]], list[str]]:
     """``show power inline``: per port admin/status/W/class/priority.
 
-    Live layout (LGS328PC): the Port column holds ``1``..``24`` and there
-    are multi-word columns such as ``Power Limit Type`` and ``Auto Class``;
-    their words must not be mistaken for the Power, Class or Type columns."""
+    Live layout (LGS328PC, retest 0.3.1)::
+
+        Port  State  Priority   Power Limit Type   Status  Class  Voltage(V)  Current(mA) Power(W)
+        1      up     medium    Auto Class         Delivering  4  54.1  185  10.0
+
+    The Port column holds ``1``..``24``. ``State`` is the administrative
+    PoE state (``Status`` is the operational one), so it fills ``admin``
+    when there is no ``Admin`` column. There is no ``Auto Class`` column:
+    ``auto_class`` is ``Enabled`` when the Power Limit Type is ``Auto
+    Class``, else ``Disabled``. Multi-word headers such as ``Power Limit
+    Type`` must not be mistaken for the Power, Class or Type columns."""
     ports: dict[str, dict[str, Any]] = {}
     for table in _poe_tables(text):
         for row in table.rows:
@@ -325,19 +333,34 @@ def parse_power_inline(text: str) -> tuple[dict[str, dict[str, Any]], list[str]]
                 row, "power(w)", "powerw", "outputpower", "power", "consum",
                 exclude=("limit", "max", "prior", "type", "class", "budget"),
             )
+            admin = column(row, "admin")
+            operational = column(row, "oper", "status", exclude=("admin",))
+            if admin is None and operational is not None:
+                admin = _exact_column(row, "state")
+            limit_type = column(row, "limittype", "powerlimittype")
+            auto_class = column(row, "autoclass", exclude=("limit",))
+            if auto_class is None and limit_type:
+                auto_class = "Enabled" if header_key(limit_type) == "autoclass" else "Disabled"
             ports[port] = {
-                "admin": column(row, "admin"),
-                "status": column(row, "oper", "status", "state", exclude=("admin",)),
+                "admin": admin,
+                "status": operational if operational is not None
+                else column(row, "state", exclude=("admin",)),
                 "power_w": to_number(power),
                 "max_power_w": to_number(column(row, "maxpower", "powerlimit", exclude=("type",))),
                 "class": column(row, "class", exclude=("auto", "limit")),
-                "auto_class": column(row, "autoclass"),
-                "limit_type": column(row, "limittype", "powerlimittype"),
+                "auto_class": auto_class,
+                "limit_type": limit_type,
                 "device": column(row, "device", "pdtype", exclude=("limit",)),
                 "priority": column(row, "prior"),
             }
     warnings = [] if ports else ["show power inline: no port rows recognised"]
     return ports, warnings
+
+
+def _exact_column(row: dict[str, str], key: str) -> str | None:
+    """Value of the column whose normalized header is exactly ``key``."""
+    value = row.get(header_key(key))
+    return value if value else None
 
 
 _UP_WORDS = {"up", "connected", "linkup", "link-up"}

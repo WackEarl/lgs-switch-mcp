@@ -24,7 +24,8 @@ def test_valid_ports(port: str) -> None:
 
 @pytest.mark.parametrize(
     "port",
-    ["0/0", "0/29", "0/01", "1/1", "gi0/1", "0/24.5", "0/", "", "0/1 ", " 0/1"],
+    ["0/0", "0/29", "0/01", "1/1", "gi1/1", "Gi0/01", "gi", "Gi 0/1 ", "0/24.5", "0/", "",
+     "0/1 ", " 0/1", " Gi0/1"],
 )
 def test_invalid_ports(port: str) -> None:
     with pytest.raises(ValidationError, match="Invalid port"):

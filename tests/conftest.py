@@ -30,6 +30,9 @@ def _private_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWITCH_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.delenv("SWITCH_CAUTION_PORTS", raising=False)
     monkeypatch.delenv("SWITCH_SYSLOG_ALLOWED", raising=False)
+    from netmiko_mcp_linksys import configdump
+
+    configdump.reset()
 
 
 @pytest.fixture

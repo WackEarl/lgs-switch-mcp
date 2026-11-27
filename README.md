@@ -77,7 +77,9 @@ package is installed in that environment.
 | `SWITCH_PRE_WRITE_SNAPSHOT` | no | `required` (default): a real write first stores a masked running-config snapshot and is refused if that fails. `best-effort`: write anyway and report the failure. `off`: no snapshot. `save_config` stores the masked running-config it saves under the same rule (the LGS cannot show its startup-config). |
 | `NETMIKO_MCP_COMMAND_FILE` | yes for `show`, `port_overview` and the parsed read tools | Path to a `commands.yml` allow/deny list. See `examples/commands.yml`. Restart the server after edits (`lru_cache`). |
 | `SWITCH_AUDIT_LOG` | no (recommended) | If set, append JSON lines per tool call: a `"phase": "start"` line with a `call_id` before the tool runs, and the result line with the same `call_id` and `duration_ms`. A start line without a result marks a call that was cut off (hub timeout such as MCP error `-32001`, server restart); `audit_tail` lists it as `unfinished`. The file is created with mode `0600`. Passwords are redacted from parameters and results. There is no default path; unset means no audit (warned at startup). An unwritable path does not break tools: a warning goes to stderr and the result gets an `audit_warning:` line. |
-| `SWITCH_READ_TIMEOUT` | no | Seconds without new output before a command is given up. Also passed to netmiko as `read_timeout_override`. Default `60`, range `1`–`600`. Keep it below the hub's request timeout for this server, or a slow command ends as a hub timeout (MCP `-32001`) instead of a tool error. |
+| `SWITCH_READ_TIMEOUT` | no | Seconds without new output before a command is given up. Also passed to netmiko as `read_timeout_override` (cut to the call budget left). Default `60`, range `1`–`600`. |
+| `SWITCH_CALL_BUDGET` | no | Wall-clock seconds one tool call may spend on the switch: waiting for the session lock, connecting and every command. Default `45`, range `5`–`600`. When it runs out the call ends with a tool error and the SSH session is discarded, so the next call starts on a fresh channel. Keep it about 15 s below the caller's request timeout: MCP clients give up after 60 s by default (MCP error `-32001`); the hub's own `MCP_CALL_TIMEOUT_MS` defaults to 300 s. Applying writes (`dry_run=false`) are not cut by it (a write must not stop between sending and its read-back); they still wait at most one budget for the session lock. |
+| `SWITCH_CONFIG_DUMP_TIMEOUT` | no | Limit in seconds for one background running-config dump (`config_read`, `config_backup`, `config_diff`). Default `240`, range `30`–`600`. See `config_read`. |
 | `SWITCH_PAGING_OFF` | no | `1` (default) sends `configure terminal` / `set cli pagination off` / `end` at session start, best effort. `0` skips it; the pager loop handles paging either way. |
 | `SWITCH_SESSION_LOG` | no | Debug only. If set, netmiko appends a session log there (mode `0600`). netmiko masks the password (`no_log`) and only channel reads are recorded. The log does contain full show output (MAC/ARP tables, descriptions); unset it after debugging. An unwritable path disables the log with a warning. |
 
@@ -121,6 +123,7 @@ until it is set to a valid list, disable and PoE-off are refused.
       "NETMIKO_MCP_COMMAND_FILE": "/config/netmiko/commands.yml",
       "SWITCH_AUDIT_LOG": "/data/netmiko/switch-audit.log",
       "SWITCH_READ_TIMEOUT": "60",
+      "SWITCH_CALL_BUDGET": "45",
       "UV_CACHE_DIR": "/data/uv-cache",
       "UV_PYTHON_INSTALL_DIR": "/data/uv-python",
       "UV_TOOL_DIR": "/data/uv-tools",
@@ -208,17 +211,17 @@ redacted device text where offered):
 
 | Tool | Reads |
 | --- | --- |
-| `health_summary(log_entries=10)` | One session: `show system information` (uptime, Config Save Status), `show power detail` (budget, consumption), `show power inline` (W per port), `show interfaces status` (up/down, speed, duplex), `show interfaces counters` (only ports with error/discard counters > 0), `show logging` (last entries); `show device temperature`, `show system fan status`, `show system utilization` (0.3.1, `environment`, only if allow-listed). |
+| `health_summary(log_entries=10)` | One session: `show system information` (uptime, Config Save Status), `show power detail` (budget, consumption), `show power inline` (W per port), `show interfaces status` (up/down, speed, duplex), `show interfaces counters` (only ports with error/discard counters > 0), `show logging` (last entries); `show device temperature`, `show system fan status`, `show system utilization` (0.3.1, `environment`, only if allow-listed; a missing one is named in `environment_skipped`). |
 | `port_status()` | Per port: link, speed, duplex, description, VLANs, PoE (W/class/status), LLDP neighbor. |
 | `port_counters(port?)` | `show interfaces counters`, all ports or one. |
 | `counters_delta(port?)` | Difference since the previous call (baseline in `SWITCH_STATE_DIR`); `new_errors` lists growing error/discard counters. The first call stores the baseline. |
 | `mac_table(port?, mac?)` | `show mac-address-table` and `count`, filtered by port or MAC. If the listing (with its own total line) and the count differ, `count_note` says so. |
 | `lldp_neighbors()` | `show lldp neighbors`. |
-| `poe_status()` | `show power detail` and `show power inline`. |
-| `config_read(source="running")` | Masked `show current running-config`. `source="startup"` answers `Not available:` (the LGS has no show command for the startup-config). Stays denied for `show`. |
+| `poe_status()` | `show power detail` and `show power inline`. On the LGS328PC `admin` is the `State` column and `auto_class` is derived from the Power Limit Type (`Enabled` for `Auto Class`). |
+| `config_read(source="running")` | Masked `show current running-config`. `source="startup"` answers `Not available:` (the LGS has no show command for the startup-config). Stays denied for `show`. The dump runs in the background (limit `SWITCH_CONFIG_DUMP_TIMEOUT`): if it is not done within the call budget the answer is `Pending: …`, and the next `config_read`, `config_backup` or `config_diff` within 5 minutes gets the finished dump once (`read_at`, `dump_seconds`, `age_seconds`). A dump from before a configuration change through this server is never handed out. |
 | `config_backup(source="running", tag?)` | Stores the masked running-config as `SWITCH_BACKUP_DIR/YYYY-MM-DD_HHMM_running[_tag].cfg`; returns path, SHA256 and the diff to the previous running backup. |
 | `config_diff()` | Masked diff from the running-config stored by the last `save_config` through this server (tag `pre-save`) to the current running-config, plus `Config Save Status`. Without such a copy only the status is returned. Saves made elsewhere are not seen. |
-| `audit_tail(n=50)` | Last `n` (1–500) audit entries, redacted again on read; calls without a result are listed as `unfinished`. |
+| `audit_tail(n=50)` | Last `n` (1–500) audit entries, redacted again on read; finished calls carry `duration_ms`, calls without a result are listed as `unfinished` with `age_ms` since their start. |
 | `show_help(prefix="")` | Types `show <prefix> ?`, reads the help listing, clears the line with Ctrl-U. Nothing is executed. `prefix`: up to five words from `[a-z0-9-]`. `keyword  description` help lines without a sensitive word are not treated as config lines (0.3.1); everything else is redacted as usual. |
 
 New in 0.3.0, writes (all `dry_run=True` by default, none saves):
@@ -241,6 +244,9 @@ Single ports only; `interface range` is not supported.
 There are no VLAN, reboot, or reset tools.
 
 Port format: `0/1` … `0/28` (no leading zeros). PoE: `0/1` … `0/24`.
+The interface prefix the switch prints is accepted and normalised before
+any check: `Gi0/15`, `gi 0/15` and `GigabitEthernet0/15` become `0/15`
+(protected and caution ports apply to the normalised port).
 Descriptions: 1–32 characters from `[A-Za-z0-9 ._-]`, with no leading or
 trailing spaces. Quotes are not allowed in the input, so the wrapper's
 own quoting cannot be broken out of.
@@ -621,6 +627,30 @@ Still unconfirmed:
   users/passwords, reboot/reset, SSH off, Telnet on, LAG/STP, `interface
   range`, free-form config.
 
+## Changes after 0.3.1 (unreleased)
+
+Fixes from the read-only retest of 0.3.1:
+
+- **Timeouts and the session hang:** a call that outlived the caller's
+  request timeout (MCP `-32001`) kept the session lock, and every later
+  call queued behind it, also after `wake_server`. Every call now has a
+  wall-clock budget (`SWITCH_CALL_BUDGET`, default 45 s) for the lock
+  wait, the connect and each command, also while a device keeps sending.
+  A session that ends in a timeout or error is discarded (transport
+  closed, no graceful logout that waits for a prompt), the lock is free
+  at once, and the next call starts on a fresh channel.
+- **config_read / config_backup / config_diff:** the running-config dump
+  runs in the background; a slow dump answers `Pending` instead of
+  running into the caller's timeout, and the next call gets the result.
+- **PoE parser:** `admin` (column `State`) and `auto_class` (from the
+  Power Limit Type) are filled for the live LGS328PC layout.
+- **Ports:** `Gi0/15`-style ports are accepted everywhere a switch port
+  is a parameter, normalised to `0/15` before the protected and caution
+  port checks.
+- **health_summary:** an environment show that is not on the allowlist
+  is named in `environment_skipped` instead of being left out silently.
+- **audit_tail:** `unfinished` entries carry `age_ms`.
+
 ## What is new in 0.3.1
 
 Fixes from the first live check of 0.3.0 on the LGS328PC (firmware
@@ -666,6 +696,21 @@ Fixes from the first live check of 0.3.0 on the LGS328PC (firmware
   total line), `show mac-address-table count` reported 85 dynamic
   addresses. The listing is complete, so the gap is the device's
   counting; `count_note` reports it instead of guessing.
+
+## Retest after 0.3.2 fixes (network admin)
+
+1. `config_read()`: masked running-config, or `Pending` first and the
+   result on the next call. No hub timeout. Then `config_backup()` and
+   `config_diff()`.
+2. `show users`: a result or a tool error within about 45 s, no `-32001`;
+   right after it `show clock` works.
+3. `health_summary`: `environment.fan` present (deployed `commands.yml`
+   needs `show system fan status`), or `environment_skipped` says why.
+4. `poe_status`: `admin` and `auto_class` filled.
+5. `port_counters(port="Gi0/15")` works like `port="0/15"`; write tools
+   with `dry_run=true` refuse `Gi0/10` and `Gi0/24` as protected ports.
+6. `audit_tail`: finished calls with `duration_ms`, cut-off ones as
+   `unfinished` with `age_ms`.
 
 ## Retest 0.3.1 (network admin)
 

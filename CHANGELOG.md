@@ -7,7 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SWITCH_CALL_BUDGET` (default 45 s): wall-clock budget of one tool call
+  for the session lock, the connect and every command. A call that runs
+  out ends with a tool error instead of the caller's request timeout
+  (MCP `-32001`). Applying writes (`dry_run=false`) are not cut by it.
+- `SWITCH_CONFIG_DUMP_TIMEOUT` (default 240 s): the running-config dump
+  of `config_read`, `config_backup` and `config_diff` runs in the
+  background. A dump that takes longer than the call budget answers
+  `Pending:`; the next call gets the finished dump once (`read_at`,
+  `dump_seconds`, `age_seconds`). A dump from before a configuration
+  change through this server is never handed out.
+- `health_summary`: `environment_skipped` names environment shows that
+  are not on the allowlist.
+- `audit_tail`: `unfinished` entries carry `age_ms`.
+
+### Changed
+
+- Ports with an interface prefix (`Gi0/15`, `gi 0/15`,
+  `GigabitEthernet0/15`) are accepted and normalised to `0/15` for every
+  switch-port parameter, before the protected and caution port checks.
+
 ### Fixed
+
+- A call cut off by the caller's request timeout kept the SSH session
+  lock; later calls queued behind it and timed out as well, also after
+  `wake_server` (retest 0.3.1: `show users`, then `show privilege` and
+  `show clock`). The lock wait is bounded, and a session that ends in a
+  timeout or error is discarded (transport closed without the graceful
+  logout that waits for a prompt).
+- `config_read("running")` ran into the caller's request timeout twice
+  (retest 0.3.1); see `SWITCH_CONFIG_DUMP_TIMEOUT` above.
+- PoE parser: `admin` and `auto_class` were always null on the LGS328PC.
+  `admin` now comes from the `State` column, `auto_class` from the Power
+  Limit Type.
 
 - Allowlist (`examples/commands.yml`): `show priority-map in-priority-type`
   and `show system fan` answered `% Incomplete command.` on the LGS328PC

@@ -147,7 +147,8 @@ def test_config_read_is_masked(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_config_read_uses_show_current_running_config(monkeypatch: pytest.MonkeyPatch) -> None:
     switch = install(monkeypatch, FakeSwitch({"show current running-config": RUNNING_CONFIG}))
     json.loads(r.config_read("running"))
-    assert switch.shows == ["show current running-config"]
+    # 0.3.2: the background dump also reads the Config Save Status for config_diff.
+    assert switch.shows == ["show current running-config", "show system information"]
 
 
 def test_config_read_startup_is_not_available(monkeypatch: pytest.MonkeyPatch) -> None:

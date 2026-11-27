@@ -18,6 +18,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,24 @@ _LOCK = threading.Lock()
 
 DEFAULT_READ_TIMEOUT = 60.0
 MAX_READ_TIMEOUT = 600.0
+
+# Wall-clock budget of one tool call (lock wait, connect, every command).
+# MCP clients give up after 60 s by default (MCP error -32001, raised on the
+# caller's side; the hub's own MCP_CALL_TIMEOUT_MS defaults to 300 s). A
+# call that runs on after the caller gave up keeps the session lock, so
+# every later call queues behind it (retest 0.3.1: "show users" hang).
+# The budget makes such a call end as a tool error well before that.
+DEFAULT_CALL_BUDGET = 45.0
+MIN_CALL_BUDGET = 5.0
+MAX_CALL_BUDGET = 600.0
+
+# Absolute deadline (time.monotonic()) of the current tool call, if any.
+_DEADLINE: ContextVar[float | None] = ContextVar("switch_call_deadline", default=None)
+
+# Bumped by every configuration set and save, so a cached running-config
+# dump from before a change is never served after it.
+_config_generation = 0
+_generation_lock = threading.Lock()
 
 # Best-effort paging-off for the Aricent/ISS-based LGS CLI. On ISS-family
 # firmware this is a Global Configuration command (it is rejected in
@@ -102,6 +121,62 @@ def read_timeout() -> float:
             f"SWITCH_READ_TIMEOUT must be between 1 and {int(MAX_READ_TIMEOUT)} seconds."
         )
     return value
+
+
+def call_budget() -> float:
+    """SWITCH_CALL_BUDGET in seconds (default 45, range 5-600)."""
+    raw = (os.environ.get("SWITCH_CALL_BUDGET") or "").strip()
+    if not raw:
+        return DEFAULT_CALL_BUDGET
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValidationError(
+            f"SWITCH_CALL_BUDGET must be a number of seconds, got {raw!r}."
+        ) from None
+    if not MIN_CALL_BUDGET <= value <= MAX_CALL_BUDGET:
+        raise ValidationError(
+            f"SWITCH_CALL_BUDGET must be between {int(MIN_CALL_BUDGET)} and "
+            f"{int(MAX_CALL_BUDGET)} seconds."
+        )
+    return value
+
+
+@contextmanager
+def call_deadline(seconds: float | None = None) -> Iterator[float]:
+    """Bound everything the current call does on the switch.
+
+    Sets an absolute deadline ``seconds`` (default: SWITCH_CALL_BUDGET)
+    from now. Nested use keeps the outer deadline. send_paged, send_help
+    and the session lock honour it; when it runs out the call ends with a
+    SwitchConnectionError instead of outliving the caller.
+    """
+    current = _DEADLINE.get()
+    if current is not None:
+        yield current
+        return
+    deadline = time.monotonic() + (call_budget() if seconds is None else seconds)
+    token = _DEADLINE.set(deadline)
+    try:
+        yield deadline
+    finally:
+        _DEADLINE.reset(token)
+
+
+def remaining_budget() -> float | None:
+    """Seconds left in the current call's budget, or None without a deadline."""
+    deadline = _DEADLINE.get()
+    return None if deadline is None else deadline - time.monotonic()
+
+
+def config_generation() -> int:
+    return _config_generation
+
+
+def _bump_config_generation() -> None:
+    global _config_generation
+    with _generation_lock:
+        _config_generation += 1
 
 
 def paging_off_enabled() -> bool:
@@ -240,6 +315,16 @@ def redact_session_log_file() -> None:
         )
 
 
+def _netmiko_read_timeout() -> float:
+    """SWITCH_READ_TIMEOUT, cut to the call budget left (netmiko's own
+    reads during connect and config sets cannot outlive the call)."""
+    limit = read_timeout()
+    left = remaining_budget()
+    if left is not None:
+        limit = max(1.0, min(limit, left))
+    return limit
+
+
 def connect_params(*, enable_session_log: bool = True) -> dict[str, Any]:
     host = (os.environ.get("SWITCH_HOST") or "").strip()
     username = (os.environ.get("SWITCH_USER") or "").strip()
@@ -280,7 +365,7 @@ def connect_params(*, enable_session_log: bool = True) -> dict[str, Any]:
         "conn_timeout": 15,
         "auth_timeout": 20,
         "fast_cli": False,
-        "read_timeout_override": read_timeout(),
+        "read_timeout_override": _netmiko_read_timeout(),
     }
     log_path = session_log_path() if enable_session_log else None
     if log_path is not None:
@@ -313,6 +398,69 @@ def disable_paging_best_effort(conn: Any) -> None:
         )
 
 
+BUSY_MESSAGE = (
+    "Switch session busy: another call still holds the SSH session "
+    "(waited {waited:g}s). Nothing was sent; try again shortly."
+)
+
+
+def _acquire_lock() -> None:
+    """Wait for the session lock, at most the call budget left (or one full
+    budget for calls without a deadline). Never waits forever: a call that
+    hung must not block every later call."""
+    left = remaining_budget()
+    wait = call_budget() if left is None else left
+    if wait <= 0 or not _LOCK.acquire(timeout=wait):
+        raise SwitchConnectionError(BUSY_MESSAGE.format(waited=max(0.0, round(wait, 1))))
+
+
+def _discard(conn: Any) -> None:
+    """Drop a session whose channel state is unknown (timeout, error).
+
+    The transport is closed first, so netmiko's graceful cleanup (which
+    waits for a prompt to leave config mode) cannot block on a wedged
+    channel; disconnect() then only closes the session log.
+    """
+    cleanup = getattr(conn, "paramiko_cleanup", None)
+    if callable(cleanup):
+        try:
+            cleanup()
+        except Exception:  # noqa: BLE001, S110 - best effort; never raised to the caller
+            pass
+    try:
+        conn.disconnect()
+    except Exception:  # noqa: BLE001, S110 - best effort; never raised to the caller
+        pass
+
+
+_DIRTY_ATTR = "_netmiko_mcp_linksys_dirty"
+
+
+def _mark_dirty(conn: Any) -> None:
+    """Remember that this channel was left mid-command (timeout): the
+    session must be discarded, not logged out gracefully, even when the
+    caller catches the error and finishes normally."""
+    try:
+        setattr(conn, _DIRTY_ATTR, True)
+    except Exception:  # noqa: BLE001, S110 - best effort; never raised to the caller
+        pass
+
+
+def _is_dirty(conn: Any) -> bool:
+    if getattr(conn, _DIRTY_ATTR, False) is True:
+        return True
+    left = remaining_budget()
+    return left is not None and left <= 0
+
+
+def _check_budget(stage: str) -> None:
+    left = remaining_budget()
+    if left is not None and left <= 0:
+        raise SwitchConnectionError(
+            f"Call budget (SWITCH_CALL_BUDGET) used up {stage}; nothing more was sent."
+        )
+
+
 @contextmanager
 def session(*, enable_session_log: bool = True) -> Iterator[Any]:
     """Yield a connected ConnectHandler, exclusive to one caller at a time.
@@ -320,14 +468,22 @@ def session(*, enable_session_log: bool = True) -> Iterator[Any]:
     SNMP write tools pass enable_session_log=False so a community echo
     cannot sit in the session log in the clear until disconnect.
     cisco_s300 session_preparation already sends terminal width 511.
+
+    The lock wait is bounded (see _acquire_lock). A session that ends with
+    an error is discarded without the graceful logout, so the lock is
+    released at once and the next call starts on a fresh channel.
     """
-    params = connect_params(enable_session_log=enable_session_log)
-    with _LOCK:
+    _acquire_lock()
+    try:
+        params = connect_params(enable_session_log=enable_session_log)
         conn = None
+        clean = False
         try:
             conn = ConnectHandler(**params)
+            _check_budget("while connecting")
             disable_paging_best_effort(conn)
             yield conn
+            clean = True
         except ValidationError:
             raise
         except SwitchConnectionError:
@@ -336,11 +492,16 @@ def session(*, enable_session_log: bool = True) -> Iterator[Any]:
             raise wrap_transport_error(exc) from None
         finally:
             if conn is not None:
-                try:
-                    conn.disconnect()
-                except Exception:  # noqa: BLE001, S110 - best effort; never raised to the caller
-                    pass
+                if clean and not _is_dirty(conn):
+                    try:
+                        conn.disconnect()
+                    except Exception:  # noqa: BLE001, S110 - best effort; never raised to the caller
+                        pass
+                else:
+                    _discard(conn)
             redact_session_log_file()
+    finally:
+        _LOCK.release()
 
 
 def send_paged(
@@ -362,6 +523,11 @@ def send_paged(
     confirmation prompt is not answered and raises SwitchConnectionError.
     """
     limit = read_timeout() if timeout is None else timeout
+    call_end = _DEADLINE.get()
+    if call_end is not None and call_end - time.monotonic() <= 0:
+        raise SwitchConnectionError(
+            f"Call budget (SWITCH_CALL_BUDGET) used up before {command!r}; it was not sent."
+        )
     prompt_re = prompt_regex(conn)
     try:
         conn.clear_buffer()
@@ -372,8 +538,12 @@ def send_paged(
     scan_from = 0
     pages = 0
     confirms = 0
-    deadline = time.monotonic() + limit
+    started = time.monotonic()
+    deadline = started + limit
     while True:
+        if call_end is not None and time.monotonic() > call_end:
+            _mark_dirty(conn)
+            _raise_budget_exceeded(command, buffer, pages, time.monotonic() - started)
         chunk = conn.read_channel()
         if chunk:
             buffer += chunk
@@ -382,6 +552,7 @@ def send_paged(
             if PAGER_RE.search(tail):
                 pages += 1
                 if pages > MAX_PAGES:
+                    _mark_dirty(conn)
                     raise SwitchConnectionError(f"Gave up after {MAX_PAGES} pager pages for {command!r}.")
                 # Drop the pager line itself; PAGER_RE in clean_output is only
                 # a fallback for prompts that are echoed elsewhere.
@@ -394,6 +565,7 @@ def send_paged(
             if confirm is not None and confirm[0].search(tail):
                 confirms += 1
                 if confirms > 1:
+                    _mark_dirty(conn)
                     raise SwitchConnectionError(
                         f"Unexpected second confirmation prompt after {command!r}; "
                         f"not answered (last line: {redact_secrets(tail[-80:])!r})."
@@ -404,6 +576,7 @@ def send_paged(
             if "\n" in buffer and prompt_re.search(tail):
                 return clean_output(buffer, command, prompt_re)
         elif time.monotonic() > deadline:
+            _mark_dirty(conn)
             if _is_snmp_sensitive_show(command):
                 # Fail closed: do not echo a possibly secret last line
                 # (foreign community, or unknown user-key layout).
@@ -418,6 +591,19 @@ def send_paged(
             )
         else:
             time.sleep(poll_interval)
+
+
+def _raise_budget_exceeded(command: str, buffer: str, pages: int, elapsed: float) -> None:
+    """The call budget ran out while ``command`` was still producing output
+    (or before its prompt came back). The session is discarded by the caller."""
+    detail = f"after {elapsed:.0f}s, pages: {pages}"
+    if not _is_snmp_sensitive_show(command):
+        last = visible_tail(buffer)[-80:]
+        detail += f", last line: {redact_show_output(command, last)!r}"
+    raise SwitchConnectionError(
+        f"Gave up on {command!r}: call budget (SWITCH_CALL_BUDGET) used up "
+        f"({detail}). The session was closed; later calls start fresh."
+    )
 
 
 SEQUENCE_SKIPPED = "not run: an earlier command in the same session failed"
@@ -493,6 +679,7 @@ def _send_config(
     kwargs: dict[str, Any] = {}
     if error_pattern is not None:
         kwargs["error_pattern"] = error_pattern
+    _bump_config_generation()
     try:
         output = conn.send_config_set(
             commands,
@@ -589,6 +776,7 @@ def run_in_session(
 def save_in_session(conn: Any) -> str:
     """Send 'save' on an open session; answer one Y/N confirmation with 'y'
     (prompt not live-confirmed)."""
+    _bump_config_generation()
     try:
         text = send_paged(conn, "save", confirm=(SAVE_CONFIRM_RE, SAVE_CONFIRM_ANSWER))
     except Exception as exc:  # noqa: BLE001 - best effort; never raised to the caller
@@ -636,6 +824,9 @@ def send_help(conn: Any, text: str, *, idle: float = HELP_IDLE_SECONDS) -> str:
     buffer = ""
     pages = 0
     hard_deadline = time.monotonic() + read_timeout()
+    call_end = _DEADLINE.get()
+    if call_end is not None:
+        hard_deadline = min(hard_deadline, call_end)
     last_output = time.monotonic()
     while True:
         chunk = conn.read_channel()
@@ -656,6 +847,8 @@ def send_help(conn: Any, text: str, *, idle: float = HELP_IDLE_SECONDS) -> str:
     conn.write_channel(CLEAR_LINE)
     conn.write_channel(getattr(conn, "RETURN", "\n"))
     settle = time.monotonic() + read_timeout()
+    if call_end is not None:
+        settle = min(settle, max(call_end, time.monotonic() + 1.0))
     tail = ""
     while time.monotonic() < settle:
         chunk = conn.read_channel()
@@ -675,7 +868,9 @@ def send_help(conn: Any, text: str, *, idle: float = HELP_IDLE_SECONDS) -> str:
 
 
 __all__ = [
+    "BUSY_MESSAGE",
     "CONFIG_ERROR_PATTERN",
+    "DEFAULT_CALL_BUDGET",
     "DEFAULT_READ_TIMEOUT",
     "MAX_PAGES",
     "MAX_READ_TIMEOUT",
@@ -693,7 +888,10 @@ __all__ = [
     "build_admin_state_commands",
     "build_description_commands",
     "build_poe_commands",
+    "call_budget",
+    "call_deadline",
     "clean_output",
+    "config_generation",
     "connect_params",
     "disable_paging_best_effort",
     "paging_off_enabled",
@@ -701,6 +899,7 @@ __all__ = [
     "read_timeout",
     "redact_session_log_file",
     "redact_show_output",
+    "remaining_budget",
     "run_config_and_readback",
     "run_config_and_readbacks",
     "run_config_set",

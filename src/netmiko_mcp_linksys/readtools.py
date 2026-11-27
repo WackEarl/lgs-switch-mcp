@@ -16,14 +16,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from netmiko_mcp_linksys import configstore, tables
+from netmiko_mcp_linksys import configdump, configstore, tables
 from netmiko_mcp_linksys.audit import audit_path
+from netmiko_mcp_linksys.commands import STARTUP_UNAVAILABLE
 from netmiko_mcp_linksys.connection import (
     SwitchConnectionError,
     run_in_session,
     run_show_sequence,
     send_help,
-    send_paged_redacted,
 )
 from netmiko_mcp_linksys.redaction import redact_device_text
 from netmiko_mcp_linksys.toolkit import (
@@ -40,7 +40,7 @@ from netmiko_mcp_linksys.validation import (
     validate_int,
     validate_port,
 )
-from netmiko_mcp_linksys.writes import ConfigUnavailableError, read_config
+from netmiko_mcp_linksys.writes import ConfigUnavailableError
 
 COUNTERS_STATE = "counters.json"
 AUDIT_TAIL_MAX = 500
@@ -139,6 +139,7 @@ def health_summary(log_entries: int = 10, include_raw: bool = False) -> str:
     # The environment shows are new in 0.3.1: a commands.yml without them
     # just leaves the section out instead of reporting rejections.
     environment_allowed, _ = filter_commands(list(ENVIRONMENT_SHOWS.values()))
+    allowed_environment = {command for command, _ in environment_allowed}
     reads = _read_bundle(
         [SHOW_SYSTEM, SHOW_POWER_DETAIL, SHOW_POWER_INLINE, SHOW_STATUS, SHOW_COUNTERS, SHOW_LOGGING,
          *(command for command, _ in environment_allowed)]
@@ -189,6 +190,16 @@ def health_summary(log_entries: int = 10, include_raw: bool = False) -> str:
     }
     if environment:
         data["environment"] = environment
+    # Retest 0.3.1: fan was missing without any hint (the deployed
+    # allowlist only had the incomplete "show system fan"). Say why a
+    # section is missing instead of leaving it out silently.
+    skipped = {
+        name: f"{command!r} is not on the allowlist (commands.yml)"
+        for name, command in ENVIRONMENT_SHOWS.items()
+        if command not in allowed_environment
+    }
+    if skipped:
+        data["environment_skipped"] = skipped
     data["parse_warnings"] = warnings
     return _respond(tool, params, reads, data, include_raw=include_raw)
 
@@ -260,9 +271,9 @@ def port_status(include_raw: bool = False) -> str:
 # ----------------------------------------------------------- counters
 
 
-def _validate_optional_port(port: str | None) -> None:
-    if port is not None:
-        validate_port(port)
+def _validate_optional_port(port: str | None) -> str | None:
+    """None, or the canonical port (``Gi0/15`` -> ``0/15``)."""
+    return None if port is None else validate_port(port)
 
 
 def port_counters(port: str | None = None, include_raw: bool = False) -> str:
@@ -272,7 +283,7 @@ def port_counters(port: str | None = None, include_raw: bool = False) -> str:
     if (refusal := _guard(tool, params)) is not None:
         return refusal
     try:
-        _validate_optional_port(port)
+        port = _validate_optional_port(port)
         _check_bool(include_raw, "include_raw")
     except ValidationError as exc:
         return fail(tool, params, f"Rejected: {exc}", allowed=False)
@@ -297,7 +308,7 @@ def counters_delta(port: str | None = None) -> str:
     if (refusal := _guard(tool, params)) is not None:
         return refusal
     try:
-        _validate_optional_port(port)
+        port = _validate_optional_port(port)
     except ValidationError as exc:
         return fail(tool, params, f"Rejected: {exc}", allowed=False)
     reads = _read_bundle([SHOW_COUNTERS])
@@ -357,7 +368,7 @@ def mac_table(port: str | None = None, mac: str | None = None, include_raw: bool
     if (refusal := _guard(tool, params)) is not None:
         return refusal
     try:
-        _validate_optional_port(port)
+        port = _validate_optional_port(port)
         wanted = None
         if mac is not None:
             wanted = tables.normalize_mac(mac) if isinstance(mac, str) else None
@@ -437,45 +448,47 @@ def poe_status(include_raw: bool = False) -> str:
 # ------------------------------------------------------------- config
 
 
-def _config_reads(sources: list[str], *, with_system: bool = False) -> tuple[dict[str, str], str | None]:
-    """Read the masked configs (and optionally show system information) in
-    one session without a session log."""
-
-    def _run(conn: Any) -> tuple[dict[str, str], str | None]:
-        configs = {source: read_config(conn, source) for source in sources}
-        system = None
-        if with_system:
-            system = send_paged_redacted(conn, SHOW_SYSTEM)
-        return configs, system
-
-    return run_in_session(_run, enable_session_log=False)
+def _running_dump() -> configdump.Dump:
+    """The masked running-config via the background dump (see configdump)."""
+    return configdump.running_config()
 
 
 def _source(source: str) -> str:
     return configstore.validate_source(source)
 
 
+def _pending(tool: str, params: dict[str, Any], exc: configdump.ConfigDumpPending) -> str:
+    return fail(tool, params, f"Pending: {exc}", allowed=True)
+
+
 def config_read(source: str = "running") -> str:
     """Return the masked running-config ('show current running-config';
     secrets replaced by [REDACTED] / [REDACTED-LINE]). source='startup'
     answers 'Not available': the LGS CLI cannot show the startup-config.
-    The show tool keeps both denied."""
+    The show tool keeps both denied. The dump runs in the background: if
+    it takes longer than one call, the answer is 'Pending' and the next
+    call returns it (with read_at and age_seconds)."""
     tool = "config_read"
     params = {"source": source}
     try:
         source = _source(source)
-        configs, _ = _config_reads([source])
+        if source != "running":
+            raise ConfigUnavailableError(STARTUP_UNAVAILABLE)
+        dump = _running_dump()
     except ValidationError as exc:
         return fail(tool, params, f"Rejected: {exc}", allowed=False)
     except ConfigUnavailableError as exc:
         return fail(tool, params, f"Not available: {exc}", allowed=True)
+    except configdump.ConfigDumpPending as exc:
+        return _pending(tool, params, exc)
     except SwitchConnectionError as exc:
         return fail(tool, params, f"Error: {exc}", allowed=True)
-    text = configs[source]
+    text = dump.config
     data = {
         "source": source,
         "sha256": configstore.sha256_text(text),
         "lines": len(text.splitlines()),
+        **dump.info(),
         "config": text,
     }
     return ok(tool, params, to_json(data))
@@ -485,23 +498,28 @@ def config_backup(source: str = "running", tag: str | None = None) -> str:
     """Store the masked running-config under SWITCH_BACKUP_DIR as
     YYYY-MM-DD_HHMM_running[_tag].cfg; returns path, SHA256 and the diff
     to the previous running backup. source='startup' is not available on
-    this device."""
+    this device. Like config_read, a slow dump answers 'Pending' first."""
     tool = "config_backup"
     params = {"source": source, "tag": tag}
     try:
         source = _source(source)
         if tag is not None and (not isinstance(tag, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,24}", tag)):
             raise ValidationError("tag must be 1..24 characters from [A-Za-z0-9-].")
-        configs, _ = _config_reads([source])
-        stored = configstore.store_backup(configs[source], source, tag=tag)
+        if source != "running":
+            raise ConfigUnavailableError(STARTUP_UNAVAILABLE)
+        dump = _running_dump()
+        stored = configstore.store_backup(dump.config, source, tag=tag)
     except ValidationError as exc:
         return fail(tool, params, f"Rejected: {exc}", allowed=False)
     except ConfigUnavailableError as exc:
         return fail(tool, params, f"Not available: {exc}", allowed=True)
+    except configdump.ConfigDumpPending as exc:
+        return _pending(tool, params, exc)
     except SwitchConnectionError as exc:
         return fail(tool, params, f"Error: {exc}", allowed=True)
     except OSError as exc:
         return fail(tool, params, f"Error: backup not written: {exc}", allowed=True)
+    stored.update(dump.info())
     return ok(tool, params, to_json(stored))
 
 
@@ -529,14 +547,17 @@ def config_diff() -> str:
     tool = "config_diff"
     params: dict[str, Any] = {}
     try:
-        configs, system = _config_reads(["running"], with_system=True)
+        dump = _running_dump()
+    except configdump.ConfigDumpPending as exc:
+        return _pending(tool, params, exc)
     except (ValidationError, SwitchConnectionError) as exc:
         return fail(tool, params, f"Error: {exc}", allowed=True)
     baseline_path, baseline = last_saved_copy()
     data: dict[str, Any] = {
         "startup_config": "not readable on this device",
         "baseline": baseline_path,
-        "config_save_status": tables.parse_system_information(system or "")["config_save_status"],
+        "config_save_status": tables.parse_system_information(dump.system or "")["config_save_status"],
+        **dump.info(),
     }
     if baseline is None:
         data["unsaved_changes"] = None
@@ -548,7 +569,7 @@ def config_diff() -> str:
         )
     else:
         diff = configstore.unified_diff(
-            baseline, configs["running"], before_label="last save (pre-save copy)",
+            baseline, dump.config, before_label="last save (pre-save copy)",
             after_label="running-config",
         )
         data["unsaved_changes"] = bool(diff)
@@ -569,10 +590,25 @@ UNFINISHED = (
 )
 
 
+def _age_ms(stamp: object) -> int | None:
+    """Milliseconds since an audit ``time`` stamp (start of an unfinished
+    call), so a call still hanging is told apart from an old cut-off one."""
+    if not isinstance(stamp, str):
+        return None
+    try:
+        started = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    if started.tzinfo is None:
+        return None
+    return max(0, int((datetime.now(UTC) - started).total_seconds() * 1000))
+
+
 def audit_tail(n: int = 50) -> str:
     """Last n (1..500) audit log entries (JSON lines), redacted again on read.
     A call that has a start record but no result (hub timeout, restart)
-    is listed with result 'unfinished'."""
+    is listed with result 'unfinished' and age_ms since its start; finished
+    calls carry duration_ms."""
     tool = "audit_tail"
     params = {"n": n}
     try:
@@ -612,6 +648,7 @@ def audit_tail(n: int = 50) -> str:
                 "tool": record.get("tool"),
                 "call_id": record.get("call_id"),
                 "result": UNFINISHED,
+                "age_ms": _age_ms(record.get("time")),
             }
         entries.append(record)
     # Recorded like every call, after the entries above were read.
