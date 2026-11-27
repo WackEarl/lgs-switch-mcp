@@ -19,7 +19,14 @@ from typing import Any
 from mcp.server import MCPServer
 from netmiko_mcp.security import validate_command
 
-from lgs_switch_mcp import configstore, connection, readtools, writes, writetools
+from lgs_switch_mcp import (
+    configdump,
+    configstore,
+    connection,
+    readtools,
+    writes,
+    writetools,
+)
 from lgs_switch_mcp.audit import audited_call, check_audit_path
 from lgs_switch_mcp.connection import (
     CONFIG_ERROR_PATTERN,
@@ -98,7 +105,6 @@ from lgs_switch_mcp.validation import (
     validate_snmp_name,
     validate_user_remove_name,
 )
-from lgs_switch_mcp.writes import read_config
 
 try:
     _PKG_VERSION = version("lgs-switch-mcp")
@@ -1206,21 +1212,46 @@ for _public, _impl in (
 SAVE_SNAPSHOT_TAG = readtools.SAVED_TAG
 
 
-def _save_flow(conn: Any, dry_run: bool) -> dict[str, Any]:
+def _running_for_save(dry_run: bool) -> tuple[str | None, list[str]]:
+    """Masked running-config via the background dump, when save_config needs it.
+
+    ``show current running-config`` is too slow to run inside the save
+    session: it outlives the caller's request timeout, and
+    ``save_config(dry_run=false)`` is not wrapped in the call budget (an
+    applying write must not be cut mid-``save``). A client abort then
+    leaves the worker thread and the SSH session running.
+
+    The dump is the same background job as ``config_read``. If it is not
+    finished within the call budget the caller gets ``Pending`` and
+    ``save`` is not sent. When ``dry_run=false`` and
+    ``SWITCH_PRE_WRITE_SNAPSHOT=off``, the dump is skipped.
+    """
+    if not dry_run and writes.snapshot_mode() == "off":
+        return None, []
+    try:
+        dump = configdump.running_config()
+    except SwitchConnectionError as exc:
+        return None, [f"running-config unavailable: {exc}"]
+    return dump.config, []
+
+
+def _save_flow(
+    conn: Any,
+    dry_run: bool,
+    running: str | None,
+    warnings: list[str],
+) -> dict[str, Any]:
     """save_config steps on one session (see save_config).
+
+    ``running`` is the masked running-config from the background dump (or
+    None). This session only sends ``save`` and ``show system information``;
+    it does not re-read the running-config.
 
     The LGS CLI cannot show the startup-config, so the backup is the masked
     running-config that is about to be saved (tag pre-save). It is also the
     baseline for config_diff and for the next save's diff."""
-    warnings: list[str] = []
     data: dict[str, Any] = {"tool": "save_config", "dry_run": dry_run}
 
-    running: str | None
-    try:
-        running = read_config(conn, "running")
-    except SwitchConnectionError as exc:
-        running = None
-        warnings.append(f"running-config unavailable: {exc}")
     previous_path, previous = readtools.last_saved_copy()
     data["startup_config"] = "not readable on this device"
     data["previous_save_copy"] = previous_path
@@ -1290,14 +1321,29 @@ def save_config(dry_run: bool = True) -> str:
     nothing is saved. dry_run=false: stores the masked running-config that
     is saved (SWITCH_BACKUP_DIR, tag pre-save; required unless
     SWITCH_PRE_WRITE_SNAPSHOT=best-effort/off), saves, returns the diff to
-    the previous save copy and the Config Save Status. Gate with hub unlock.
+    the previous save copy and the Config Save Status. The running-config
+    copy uses the same background dump as config_read: a slow dump answers
+    Pending first; the next call saves. Gate with hub unlock.
     """
     params: dict[str, Any] = {"dry_run": dry_run}
     if not isinstance(dry_run, bool):
         return _fail("save_config", params, "Rejected: dry_run must be true or false.",
                      allowed=False)
     try:
-        data = run_in_session(lambda conn: _save_flow(conn, dry_run), enable_session_log=False)
+        # The snapshot uses the call budget even for dry_run=false, so a
+        # slow dump answers Pending (and closes nothing mid-save). The
+        # actual 'save' runs afterwards without that deadline.
+        if connection.remaining_budget() is None:
+            with call_deadline():
+                running, warnings = _running_for_save(dry_run)
+        else:
+            running, warnings = _running_for_save(dry_run)
+        data = run_in_session(
+            lambda conn: _save_flow(conn, dry_run, running, warnings),
+            enable_session_log=False,
+        )
+    except configdump.ConfigDumpPending as exc:
+        return _fail("save_config", params, f"Pending: {exc}", allowed=True)
     except (ValidationError, SwitchConnectionError) as exc:
         return _fail("save_config", params, f"Error: {exc}", allowed=True)
     return ok("save_config", params, json.dumps(data, indent=2, ensure_ascii=False),

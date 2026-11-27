@@ -40,6 +40,8 @@ from lgs_switch_mcp.parser import (
     PAGE_BREAK,
     PAGER_RE,
     clean_output,
+    prompt_end_regex,
+    prompt_prefix,
     prompt_regex,
     visible_tail,
 )
@@ -902,6 +904,10 @@ def send_paged(
             f"Call budget (SWITCH_CALL_BUDGET) used up before {command!r}; it was not sent."
         )
     prompt_re = prompt_regex(conn)
+    # After 'save', "[OK]" can share the last line with the prompt.
+    # Only then allow a prefix; a loose match on show output could cut a
+    # running-config dump short if a line ended with the hostname and '#'.
+    prompt_end = prompt_end_regex(conn, allow_prefix=confirm is not None)
     try:
         conn.clear_buffer()
     except Exception:  # noqa: BLE001, S110 - best effort; never raised to the caller
@@ -946,8 +952,8 @@ def send_paged(
                 conn.write_channel(confirm[1] + getattr(conn, "RETURN", "\n"))
                 scan_from = len(buffer)
                 continue
-            if "\n" in buffer and prompt_re.search(tail):
-                return clean_output(buffer, command, prompt_re)
+            if "\n" in buffer and prompt_prefix(tail, prompt_end) is not None:
+                return clean_output(buffer, command, prompt_re, prompt_end=prompt_end)
         elif time.monotonic() > deadline:
             _mark_dirty(conn)
             if _is_snmp_sensitive_show(command):
