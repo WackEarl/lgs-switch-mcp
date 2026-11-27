@@ -1,0 +1,18 @@
+netmiko-mcp-linksys
+Copyright (c) 2026 WackEarl
+
+This product depends on the following third-party works. Their licenses
+apply to those works, not to the original code in this repository.
+
+netmiko (https://github.com/ktbyers/netmiko)
+Copyright (c) 2016 Kirk Byers
+Licensed under the MIT License.
+
+netmiko-mcp (https://github.com/ktbyers/netmiko_mcp)
+Copyright 2026 Kirk Byers
+Licensed under the Apache License, Version 2.0
+(https://www.apache.org/licenses/LICENSE-2.0).
+
+The `show` tool calls netmiko-mcp's command filter at runtime and uses the
+same commands.yml allow/deny list format. That filter is not copied into
+this repository.

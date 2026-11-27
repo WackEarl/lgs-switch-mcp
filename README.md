@@ -5,12 +5,12 @@
 stdio MCP server for a single Linksys LGS-series switch (developed against the
 LGS328PC CLI).
 
-This project is based on [netmiko](https://github.com/ktbyers/netmiko) and
-[netmiko-mcp](https://github.com/ktbyers/netmiko_mcp). The `show` tool reuses
-netmiko-mcp's command filter (`netmiko_mcp.security.validate_command`) and the
-same allow/deny list format (`commands.yml`). Configuration tools send only
-fixed command sequences built by this wrapper; the model never supplies
-free-form config.
+This project is a separate wrapper, based on [netmiko](https://github.com/ktbyers/netmiko)
+and [netmiko-mcp](https://github.com/ktbyers/netmiko_mcp) by Kirk Byers. The `show`
+tool reuses netmiko-mcp's command filter (`netmiko_mcp.security.validate_command`)
+and the same allow/deny list format (`commands.yml`). Configuration tools send
+only fixed command sequences built by this wrapper; the model never supplies
+free-form config. See [Credits](#credits).
 
 **This is 0.3.2**, the fixes from the read-only retest of 0.3.1 and a
 rebuilt SSH session handling (see [What is new in 0.3.2](#what-is-new-in-032)).
@@ -875,6 +875,16 @@ Still to confirm with 0.1.2:
   `save`, including whether it asks for a confirmation and its exact text
   ([#4](https://github.com/WackEarl/netmiko-mcp-linksys/issues/4)).
 - Hub `unlock` behaviour for `save_config`.
+
+## Credits
+
+This repository's own code is licensed under the MIT License (`LICENSE`).
+It is not a fork of the projects below. It depends on them at runtime and
+follows netmiko-mcp's `commands.yml` format; their sources are not vendored
+here. Copyright notices are also in `NOTICE`.
+
+- [netmiko](https://github.com/ktbyers/netmiko) by Kirk Byers, MIT License
+- [netmiko-mcp](https://github.com/ktbyers/netmiko_mcp) by Kirk Byers, Apache License 2.0
 
 ## Development
 
