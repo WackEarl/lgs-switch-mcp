@@ -86,6 +86,7 @@ from lgs_switch_mcp.toolkit import (
     fail,
     ok,
     prepare_runtime,
+    rejected_show_message,
     with_audit_warning,
 )
 from lgs_switch_mcp.validation import (
@@ -204,7 +205,7 @@ def show(command: str) -> str:
         return _fail(
             "show",
             params,
-            f"Command rejected: {verdict.reason}",
+            rejected_show_message(command, verdict.reason),
             allowed=False,
         )
     try:
@@ -236,7 +237,9 @@ def port_overview() -> str:
     for command in PORT_OVERVIEW_COMMANDS:
         verdict = validate_command(command)
         if not verdict.allowed:
-            errors.append(f"{command}: Command rejected: {verdict.reason}")
+            errors.append(
+                f"{command}: {rejected_show_message(command, verdict.reason)}"
+            )
             continue
         allowed.append((command, verdict.normalized_command))
     if allowed:

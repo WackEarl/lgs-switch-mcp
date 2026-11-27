@@ -2,6 +2,11 @@
 # Validation is performed by netmiko-mcp (default-deny; deny wins).
 # Config actions never go through this file; they use the fixed wrapper tools.
 # Changes take effect only after a server restart (lru_cache).
+# Bare "show system" is not allow-listed. Allow matching is exact unless
+# an entry contains *; incomplete prefixes such as "show system fan"
+# returned "% Incomplete command." in the 0.3.1 live check. Use the
+# complete forms below. Firmware, uptime, and Config Save Status come
+# from "show system information", not "show version".
 allowed_commands:
   - show system information
   - show clock
