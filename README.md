@@ -281,6 +281,9 @@ own quoting cannot be broken out of.
 - **Default deny** for `show`. Only commands listed in `allowed_commands` run;
   `denied_commands` always wins. The allow list does not expand abbreviations
   (`sh sys info` is not `show system information`). See the netmiko-mcp 0.3.0 validator docs.
+  Rejections from the `show` tool name the reason (`DENY_MATCH`,
+  `NO_ALLOW_MATCH`, …). For `show version` and bare prefixes such as
+  `show system` the message also names the complete allowed command.
   The wrapper also rejects `|`, `;`, and newlines before that filter runs
   (`allow_pipe` is not honoured).
 - **No free-form config.** Interface commands are built only by this package.
@@ -857,6 +860,9 @@ Confirmed on LGS328PC, firmware 1.01.02.02 (0.1.0 and 0.1.1 live tests):
 - Login lands directly in privilege 15 (`LGS328PC#`); no enable needed, no
   banner, no second login prompt.
 - `show version` does not exist; use `show system information`.
+- Bare `show system` is not on the allowlist (incomplete prefixes
+  failed live); use `show system information`, `show system fan
+  status`, or `show system utilization`.
 - Read-back `show power inline gigabitethernet 0/N` works.
 - Read-back `show interfaces gigabitethernet 0/N` works; output starts with
   e.g. `Gi0/24 up, line protocol is up (connected)`.

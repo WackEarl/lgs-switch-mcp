@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The `show` tool still rejects `show version` (not a valid LGS command;
+  use `show system information`) and bare `show system` (not on the
+  allowlist; the complete forms are `show system information`,
+  `show system fan status`, and `show system utilization`). Those
+  rejections now name the reason and the command to use instead.
+  Dangerous commands and config dumps through `show` stay blocked.
+
 ## [0.4.1] - 2026-11-27
 
 ### Fixed
