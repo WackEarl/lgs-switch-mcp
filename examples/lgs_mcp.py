@@ -3,7 +3,7 @@
 
 The intended installation path is the packaged entrypoint:
 
-    uvx --from git+https://github.com/WackEarl/lgs-switch-mcp@v0.4.0 lgs-switch-mcp
+    uvx --from git+https://github.com/WackEarl/lgs-switch-mcp@v0.4.1 lgs-switch-mcp
 
 The previous command name `netmiko-mcp-linksys` still works as a deprecated
 alias. This file is not a standalone implementation. The `lgs-switch-mcp`

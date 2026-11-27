@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.1] - 2026-11-27
 
 ### Fixed
 
@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a slow dump answers `Pending:` and does not send `save`; the next call
   picks up the dump and saves. With `SWITCH_PRE_WRITE_SNAPSHOT=off` the
   dump is skipped. After `save`, a prompt stuck to `[OK]` on the same
-  line is recognised as the end of the command.
+  line is recognised as the end of the command (in #19).
 
 ## [0.4.0] - 2026-11-27
 

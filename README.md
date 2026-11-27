@@ -14,9 +14,11 @@ and the same allow/deny list format (`commands.yml`). Configuration tools send
 only fixed command sequences built by this wrapper; the model never supplies
 free-form config. See [Credits](#credits).
 
-**This is 0.4.0**, the rename to `lgs-switch-mcp` (package and GitHub
-repository), GitHub Actions CI, and upstream credits. The 0.3.2 session
-handling is included (see [What is new in 0.3.2](#what-is-new-in-032)).
+**This is 0.4.1**, a fix so `save_config` no longer hangs on the
+running-config dump (in #19). 0.4.0 renamed the package and GitHub
+repository to `lgs-switch-mcp`, added GitHub Actions CI, and credited
+upstream. The 0.3.2 session handling is included (see
+[What is new in 0.3.2](#what-is-new-in-032)).
 0.3.1 fixed the first live check of 0.3.0 (see
 [What is new in 0.3.1](#what-is-new-in-031)). 0.3.0 added parsed JSON read tools (`health_summary`,
 `port_status`, `port_counters`, `counters_delta`, `mac_table`,
@@ -43,7 +45,7 @@ The intended way to run this server is the packaged entrypoint, pinned to a
 tag:
 
 ```bash
-uvx --from git+https://github.com/WackEarl/lgs-switch-mcp@v0.4.0 lgs-switch-mcp
+uvx --from git+https://github.com/WackEarl/lgs-switch-mcp@v0.4.1 lgs-switch-mcp
 ```
 
 From a local checkout:
@@ -66,7 +68,7 @@ A compatibility shim, `lgs_mcp.py`, exists only for the older hub invocation
 implementation: it imports `lgs_switch_mcp` (the previous
 `netmiko_mcp_linksys` import still works as a deprecated alias). Prefer the
 `uvx --from ... lgs-switch-mcp` entry above. If you must keep the old
-command, add `--with git+https://github.com/WackEarl/lgs-switch-mcp@v0.4.0`
+command, add `--with git+https://github.com/WackEarl/lgs-switch-mcp@v0.4.1`
 so the package is installed in that environment.
 
 ## Environment variables
@@ -112,7 +114,7 @@ until the community-create syntax has been confirmed live; only then set it to `
 hub env (shown below as the value to use after that confirmation). Fill `SWITCH_PROTECTED_PORTS` after the first read test —
 until it is set to a valid list, disable and PoE-off are refused.
 
-The snippet below is the current production pin (`@v0.4.0` and the new
+The snippet below is the current production pin (`@v0.4.1` and the new
 command name). The previous command `netmiko-mcp-linksys` remains a
 deprecated alias.
 
@@ -122,7 +124,7 @@ deprecated alias.
     "command": "uvx",
     "args": [
       "--python", "3.12",
-      "--from", "git+https://github.com/WackEarl/lgs-switch-mcp@v0.4.0",
+      "--from", "git+https://github.com/WackEarl/lgs-switch-mcp@v0.4.1",
       "lgs-switch-mcp"
     ],
     "env": {
