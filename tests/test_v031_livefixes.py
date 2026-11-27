@@ -117,11 +117,14 @@ def test_port_status_vlans_and_warning(
         ("show monitor all", True),
         ("show monitor session 1", True),
         ("show monitor", False),
-        ("show priority-map in-priority-type", True),
+        ("show priority-map in-priority-type vlanPri", True),
+        ("show priority-map in-priority-type ipDscp", True),
+        ("show priority-map in-priority-type", False),
         ("show priority-map", False),
         ("show version", False),
         ("show device temperature", True),
-        ("show system fan", True),
+        ("show system fan status", True),
+        ("show system fan", False),
         ("show system utilization", True),
         ("show radius server", True),
         ("show current running-config", False),
@@ -314,7 +317,7 @@ def test_health_summary_environment(
             {
                 "show system information": s.SYSTEM,
                 "show device temperature": live.TEMPERATURE,
-                "show system fan": live.FAN,
+                "show system fan status": live.FAN,
                 "show system utilization": live.UTILIZATION,
             }
         ),
@@ -352,3 +355,21 @@ def test_health_summary_without_environment_allowlist(
 
 def test_environment_unavailable_marker() -> None:
     assert tables.parse_environment("% Invalid Command\n") == {"unavailable": "% Invalid Command"}
+
+
+# ------------------------------------------------- 0.3.2: documented layouts
+
+
+def test_environment_documented_layouts() -> None:
+    """Layouts from the CLI reference of the same CLI family (Panasonic MU
+    series, sections 3.77 and 3.83); the LGS live values match the format."""
+    from netmiko_mcp_linksys.tables import parse_environment
+
+    fan = parse_environment("\nSystem Fan Status: OK\n")
+    assert fan["fields"]["System Fan Status"] == "OK"
+    temperature = parse_environment(
+        "Sensor local temperature : 42 °C\nSensor remote temperature : 37 °C\n"
+    )
+    assert temperature["fields"]["Sensor local temperature"] == "42 °C"
+    incomplete = parse_environment("% Incomplete command.\n")
+    assert incomplete == {"unavailable": "% Incomplete command."}

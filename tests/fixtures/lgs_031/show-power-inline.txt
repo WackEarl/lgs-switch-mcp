@@ -1,0 +1,29 @@
+PoE Port Info
+-------------
+
+Port  State  Priority   Power Limit Type   Status               Class   Voltage(V)  Current(mA) Power(W)
+----  -----  --------  ------------------ --------------------- ------  ----------  ----------  ----------
+1      up     medium    Auto Class         Delivering            4       54.1        185         10.0
+2      up     medium    Auto Class         Searching             0       0.0         0           0.0
+3      up     medium    Auto Class         Delivering            4       54.1        26          1.4
+4      up     medium    Auto Class         Delivering            4       54.1        92          5.0
+5      up     medium    Auto Class         Searching             0       0.0         0           0.0
+6      up     medium    Auto Class         Searching             0       0.0         0           0.0
+7      up     medium    Auto Class         Searching             0       0.0         0           0.0
+8      up     medium    Auto Class         Searching             0       0.0         0           0.0
+9      up     medium    Auto Class         Delivering            4       54.1        101         5.4
+10     up     medium    Auto Class         Delivering            4       53.9        228         12.3
+11     up     medium    Auto Class         Delivering            4       54.0        114         6.1
+12     up     medium    Auto Class         Delivering            0       53.9        35          1.9
+13     up     medium    Auto Class         Searching             0       0.0         0           0.0
+14     up     medium    Auto Class         Delivering            4       54.1        154         8.3
+15     up     medium    Auto Class         Delivering            4       54.1        85          4.6
+16     up     medium    Auto Class         Delivering            4       54.1        76          4.1
+17     up     medium    Auto Class         Searching             0       0.0         0           0.0
+18     up     medium    Auto Class         Searching             0       0.0         0           0.0
+19     up     medium    Auto Class         Searching             0       0.0         0           0.0
+20     up     medium    Auto Class         Searching             0       0.0         0           0.0
+21     up     medium    Auto Class         Searching             0       0.0         0           0.0
+22     up     medium    Auto Class         Searching             0       0.0         0           0.0
+23     up     medium    Auto Class         Searching             0       0.0         0           0.0
+24     up     medium    Auto Class         Searching             0       0.0         0           0.0

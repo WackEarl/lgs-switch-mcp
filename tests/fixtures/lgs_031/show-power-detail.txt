@@ -1,0 +1,7 @@
+PSE Status
+----------
+PoE Global Admin State : Enabled
+PSE Oper Status        : On
+Max Power Supply       : 250 (watts)
+Total Power Budget     : 250  (watts)
+Total Power Consumed   : 62.2 (watts)

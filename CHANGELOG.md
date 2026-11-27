@@ -5,7 +5,72 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.2] - 2026-11-27
+
+### Added
+
+- SSH session handling: at most one SSH session to the switch, shared by
+  tool calls and the background config dump. A clean session is kept for
+  `SWITCH_SESSION_IDLE` seconds (default 10, `0` = log out after every
+  call) and then logged out with `exit`.
+- Reconnect protection: after a command timeout or a failed or slow
+  connect, no new SSH connection is opened for `SWITCH_COOLDOWN_BASE`
+  seconds (default 30, doubling per failure up to `SWITCH_COOLDOWN_MAX`,
+  default 600, reset by a successful call, kept in
+  `SWITCH_STATE_DIR/ssh-breaker.json` across restarts). Calls answer
+  `Switch cooling down …; retry in Ns` without connecting.
+- `SWITCH_LOGOUT_TIMEOUT` (default 3 s): time the switch gets to close
+  the channel after `exit` before the transport is closed hard.
+- Graceful shutdown: the kept session is logged out when the process
+  ends (stdin closed, SIGTERM, SIGHUP, interpreter exit).
+
+- `SWITCH_CALL_BUDGET` (default 45 s): wall-clock budget of one tool call
+  for the session lock, the connect and every command. A call that runs
+  out ends with a tool error instead of the caller's request timeout
+  (MCP `-32001`). Applying writes (`dry_run=false`) are not cut by it.
+- `SWITCH_CONFIG_DUMP_TIMEOUT` (default 240 s): the running-config dump
+  of `config_read`, `config_backup` and `config_diff` runs in the
+  background. A dump that takes longer than the call budget answers
+  `Pending:`; the next call gets the finished dump once (`read_at`,
+  `dump_seconds`, `age_seconds`). A dump from before a configuration
+  change through this server is never handed out.
+- `health_summary`: `environment_skipped` names environment shows that
+  are not on the allowlist.
+- `audit_tail`: `unfinished` entries carry `age_ms`.
+
+### Changed
+
+- Ports with an interface prefix (`Gi0/15`, `gi 0/15`,
+  `GigabitEthernet0/15`) are accepted and normalised to `0/15` for every
+  switch-port parameter, before the protected and caution port checks.
+
+### Fixed
+
+- A call cut off by the caller's request timeout kept the SSH session
+  lock; later calls queued behind it and timed out as well, also after
+  `wake_server` (retest 0.3.1: `show users`, then `show privilege` and
+  `show clock`). The lock wait is bounded. A session that ends in a
+  timeout is aborted (Ctrl-C, pager quit, output drained), logged out
+  with `exit` within `SWITCH_LOGOUT_TIMEOUT`, then the transport is
+  closed hard; it is never reused.
+- A failed connect could leave an authenticated SSH transport open for
+  the life of the process (netmiko opens the shell channel inside its
+  constructor and does not close the transport when that fails). The
+  connection is now opened in two steps and always closed on failure.
+- Every tool call opened a new SSH login; together with the leak above
+  and calls queued behind a hung call this could exhaust the switch's
+  SSH sessions after the 0.3.1 retest.
+- `config_read("running")` ran into the caller's request timeout twice
+  (retest 0.3.1); see `SWITCH_CONFIG_DUMP_TIMEOUT` above.
+- PoE parser: `admin` and `auto_class` were always null on the LGS328PC.
+  `admin` now comes from the `State` column, `auto_class` from the Power
+  Limit Type.
+- Allowlist (`examples/commands.yml`): `show priority-map in-priority-type`
+  and `show system fan` answered `% Incomplete command.` on the LGS328PC
+  (retest 0.3.1). Now `show priority-map in-priority-type vlanPri` and
+  `show priority-map in-priority-type ipDscp` (Linksys LGSxxx CLI User
+  Manual, QoS) and `show system fan status`; `health_summary` reads the
+  fan status with `show system fan status`.
 
 ## [0.3.1] - 2026-11-26
 

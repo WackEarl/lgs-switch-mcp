@@ -389,7 +389,11 @@ def poe_cycle(
             # applied even if it reported an error). Never when the off
             # command was not attempted: PoE may be off on purpose.
             try:
-                run_in_session(lambda conn: _set_poe(conn, port, True), enable_session_log=False)
+                run_in_session(
+                    lambda conn: _set_poe(conn, port, True),
+                    enable_session_log=False,
+                    bypass_cooldown=True,
+                )
                 state["on_sent"] = True
                 state["on_retry"] = True
             except (ValidationError, SwitchConnectionError) as exc:

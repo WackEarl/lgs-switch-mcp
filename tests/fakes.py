@@ -60,7 +60,14 @@ class FakeSwitch:
 
 
 def install(monkeypatch: pytest.MonkeyPatch, switch: FakeSwitch) -> FakeSwitch:
-    from netmiko_mcp_linksys import connection, readtools, server, writes, writetools
+    from netmiko_mcp_linksys import (
+        configdump,
+        connection,
+        readtools,
+        server,
+        writes,
+        writetools,
+    )
     from netmiko_mcp_linksys.connection import redact_show_output
 
     def fake_send_paged(_conn: Any, command: str, **_kwargs: Any) -> str:
@@ -75,7 +82,8 @@ def install(monkeypatch: pytest.MonkeyPatch, switch: FakeSwitch) -> FakeSwitch:
         return [(c, redact_show_output(c, switch.show(c)), None) for c in commands]
 
     monkeypatch.setattr(connection, "send_paged", fake_send_paged)
-    for module in (writes, writetools, readtools, server):
+    configdump.reset()
+    for module in (writes, writetools, readtools, server, configdump):
         if hasattr(module, "send_paged"):
             monkeypatch.setattr(module, "send_paged", fake_send_paged)
         if hasattr(module, "run_in_session"):

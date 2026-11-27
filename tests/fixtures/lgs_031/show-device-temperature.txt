@@ -1,0 +1,2 @@
+Sensor local temperature   : 41 °C
+Sensor remote temperature   : 37 °C

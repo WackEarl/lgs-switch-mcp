@@ -70,8 +70,12 @@ allowed_commands:
   - show rmon
   - show rmon *
   - show qos global info
-  # Bare "show priority-map" is incomplete on the LGS (live check 0.3.0).
-  - show priority-map in-priority-type
+  # Bare "show priority-map" and "show priority-map in-priority-type" are
+  # incomplete on the LGS (live checks 0.3.0/0.3.1). Syntax per Linksys
+  # LGSxxx CLI User Manual (QoS, show priority-map):
+  # show priority-map in-priority-type { vlanPri | ipDscp }
+  - show priority-map in-priority-type vlanPri
+  - show priority-map in-priority-type ipDscp
   - show class-policy
   - show scheduler
   - show ip igmp snooping
@@ -86,7 +90,9 @@ allowed_commands:
   # 0.3.1: environment and load (live check 0.3.0; there is no show env*,
   # show cpu* or show memory*). Used by health_summary.
   - show device temperature
-  - show system fan
+  # "show system fan" alone is incomplete (live check 0.3.1). Not in the
+  # Linksys CLI manual; same CLI family documents "show system fan status".
+  - show system fan status
   - show system utilization
 denied_commands:
   # Not a valid LGS command (live check 0.3.0: "% Invalid Command").

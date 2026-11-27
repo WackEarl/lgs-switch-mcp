@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import atexit
+import functools
 import inspect
 import json
 import os
 import re
+import signal
 import sys
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -16,7 +19,7 @@ from typing import Any
 from mcp.server import MCPServer
 from netmiko_mcp.security import validate_command
 
-from netmiko_mcp_linksys import configstore, readtools, writes, writetools
+from netmiko_mcp_linksys import configstore, connection, readtools, writes, writetools
 from netmiko_mcp_linksys.audit import audited_call, check_audit_path
 from netmiko_mcp_linksys.connection import (
     CONFIG_ERROR_PATTERN,
@@ -24,6 +27,8 @@ from netmiko_mcp_linksys.connection import (
     SwitchConnectionError,
     _send_config,
     build_description_commands,
+    call_budget,
+    call_deadline,
     read_timeout,
     redact_show_output,
     run_in_session,
@@ -78,6 +83,7 @@ from netmiko_mcp_linksys.toolkit import (
 )
 from netmiko_mcp_linksys.validation import (
     ValidationError,
+    canonical_port,
     port_policy_text,
     redact_secrets,
     reject_protected_port,
@@ -1331,17 +1337,92 @@ ALL_TOOLS = (
     *writetools.WRITE_TOOLS,
 )
 
-for _function in ALL_TOOLS:
-    mcp.tool(name=_function.__name__, description=tool_description(_function))(
-        audited_call(_function)
+# Tools whose "port" parameter is not a switch port (syslog UDP port).
+NON_SWITCH_PORT_TOOLS = frozenset({"syslog_set"})
+
+
+def _takes_switch_port(function: Any) -> bool:
+    return (
+        "port" in inspect.signature(function).parameters
+        and function.__name__ not in NON_SWITCH_PORT_TOOLS
     )
 
 
+def _is_applying_write(function: Any, kwargs: dict[str, Any]) -> bool:
+    """True for a write tool called with dry_run=false."""
+    parameter = inspect.signature(function).parameters.get("dry_run")
+    if parameter is None:
+        return False
+    return kwargs.get("dry_run", parameter.default) is False
+
+
+def tool_entry(function: Any) -> Any:
+    """Wrap a tool for MCP registration (inside the audit wrapper).
+
+    - A switch-port argument is canonicalised once, centrally
+      (``Gi0/15`` -> ``0/15``), before validation and the protected /
+      caution port checks see it.
+    - Every call except an applying write (dry_run=false) runs under the
+      call budget (SWITCH_CALL_BUDGET), so it ends as a tool error before
+      the caller's request timeout instead of holding the session.
+      Applying writes keep the idle timeout only: a write must not be cut
+      between sending and its read-back.
+    """
+    takes_port = _takes_switch_port(function)
+
+    @functools.wraps(function)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        if takes_port and "port" in kwargs:
+            kwargs["port"] = canonical_port(kwargs["port"])
+        if _is_applying_write(function, kwargs):
+            return function(*args, **kwargs)
+        try:
+            seconds = call_budget()
+        except ValidationError as exc:
+            return f"Error: {exc}"
+        with call_deadline(seconds):
+            return function(*args, **kwargs)
+
+    return wrapper
+
+
+for _function in ALL_TOOLS:
+    mcp.tool(name=_function.__name__, description=tool_description(_function))(
+        audited_call(tool_entry(_function))
+    )
+
+
+def _install_signal_handlers() -> None:
+    """Log out of the switch on SIGTERM/SIGHUP too (hub stop, restart),
+    not only on a normal end of stdin; atexit covers interpreter exit."""
+    atexit.register(connection.shutdown)
+
+    def _stop(signum: int, _frame: Any) -> None:
+        connection.shutdown()
+        raise SystemExit(128 + signum)
+
+    for name in ("SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, _stop)
+        except (ValueError, OSError):  # not the main thread / not supported
+            pass
+
+
 def main() -> None:
-    """Start the stdio MCP server. Does not open an SSH session."""
+    """Start the stdio MCP server. Does not open an SSH session.
+
+    On exit the kept SSH session is logged out (graceful shutdown).
+    """
     prepare_runtime()
     startup_checks()
-    mcp.run(transport="stdio")
+    _install_signal_handlers()
+    try:
+        mcp.run(transport="stdio")
+    finally:
+        connection.shutdown()
 
 
 if __name__ == "__main__":

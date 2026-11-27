@@ -281,10 +281,31 @@ def parse_protected_ports(raw: str | None = None) -> set[str]:
     return ports
 
 
+# Interface prefixes as the switch prints them (show interfaces counters:
+# "Gi0/15"; config: "gigabitethernet 0/15"). Only in front of "0/".
+_PORT_PREFIX_RE = re.compile(r"^(?:gigabitethernet|gi|ge)\s*(?=0/)", re.IGNORECASE)
+
+
+def canonical_port(port: object) -> object:
+    """``Gi0/15``, ``gi 0/15``, ``GigabitEthernet0/15`` -> ``0/15``.
+
+    Anything else is returned unchanged, so validate_port still rejects it
+    (no whitespace trimming, no leading zeros). Non-strings pass through untouched.
+    Every port check (validation, protected and caution ports) uses this
+    first, so an interface prefix cannot slip past the port policy.
+    """
+    if not isinstance(port, str):
+        return port
+    return _PORT_PREFIX_RE.sub("", port, count=1)
+
+
 def validate_port(port: str, *, poe: bool = False) -> str:
+    """Return the canonical port (``0/N``) or raise ValidationError."""
+    port = canonical_port(port)  # type: ignore[assignment]
     if not isinstance(port, str) or not PORT_RE.fullmatch(port):
         raise ValidationError(
-            f"Invalid port {port!r}. Expected 0/1..0/{MAX_PORT} (no leading zeros)."
+            f"Invalid port {port!r}. Expected 0/1..0/{MAX_PORT} (no leading zeros; "
+            "a Gi prefix such as Gi0/15 is accepted)."
         )
     if poe and not POE_PORT_RE.fullmatch(port):
         raise ValidationError(
@@ -323,6 +344,7 @@ def reject_if_protected(port: str, *, disabling: bool, action: str) -> None:
     """
     if not disabling:
         return
+    port = canonical_port(port)  # type: ignore[assignment]
     protected = parse_protected_ports()
     if port in protected:
         raise ValidationError(
@@ -338,6 +360,7 @@ def reject_protected_port(port: str, *, action: str) -> None:
     "enable"/"set"), and an unset, empty, or invalid list refuses the
     action for every port (fail-closed).
     """
+    port = canonical_port(port)  # type: ignore[assignment]
     protected = parse_protected_ports()
     if port in protected:
         raise ValidationError(
@@ -369,6 +392,7 @@ def require_caution_confirmation(port: str, *, confirmed: bool, action: str) -> 
 
     Returns True when the port is a caution port, so the caller can note it.
     """
+    port = canonical_port(port)  # type: ignore[assignment]
     if port not in parse_caution_ports():
         return False
     if confirmed is not True:

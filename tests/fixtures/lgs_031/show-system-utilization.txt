@@ -1,0 +1,17 @@
+CPU Utilization:
+usr                  : 14.85 %
+nice                 : 0.00 %
+sys                  : 1.98 %
+idle                 : 83.17 %
+iowait               : 0.00 %
+irq                  : 0.00 %
+soft                 : 0.00 %
+steal                : 0.00 %
+guest                : 0.00 %
+
+Memory Utilization:
+total                : 247 MB
+used                 : 202 MB
+free                 : 45 MB
+shared               : 0 MB
+buffers              : 0 MB
