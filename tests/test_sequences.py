@@ -113,13 +113,16 @@ def test_run_config_and_readback() -> None:
 def test_run_config_rejects_device_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWITCH_PAGING_OFF", "0")
     conn = MagicMock()
+    conn.RETURN = "\n"
+    conn.remote_conn.closed = True  # the logout finds the channel closed
     conn.send_config_set.return_value = "% Invalid input detected"
     with patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=conn):
         from netmiko_mcp_linksys.connection import SwitchConnectionError
 
         with pytest.raises(SwitchConnectionError, match="rejected"):
             run_config_and_readback(build_poe_commands("0/1", True), READBACK_POE.format(port="0/1"))
-    conn.write_channel.assert_not_called()
+    # No readback after the rejection; only the logout was written.
+    assert [c.args[0] for c in conn.write_channel.call_args_list] == ["exit\n"]
 
 
 @pytest.mark.parametrize("description", ["Error LED", "Invalid Port"])

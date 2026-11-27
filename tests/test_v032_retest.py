@@ -384,12 +384,21 @@ def test_caught_timeout_still_discards_the_session() -> None:
     assert not connection._LOCK.locked()
 
 
-def test_clean_session_uses_graceful_disconnect() -> None:
+def test_clean_session_logs_out_without_abort() -> None:
     chan = PromptChannel("12:00:00")
+    writes: list[str] = []
+    original = chan.write_channel
+
+    def record(data: str) -> None:
+        writes.append(data)
+        original(data)
+
+    chan.write_channel = record  # type: ignore[method-assign]
     with patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=chan):
         assert run_show("show clock") == "12:00:00"
+    assert "\x03" not in writes
+    assert writes[-1] == "exit\n"
     chan.disconnect.assert_called_once()
-    chan.paramiko_cleanup.assert_not_called()
 
 
 def test_busy_lock_fails_fast_instead_of_queueing() -> None:

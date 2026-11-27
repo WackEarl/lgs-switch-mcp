@@ -10,7 +10,9 @@ same allow/deny list format (`commands.yml`). Configuration tools send only
 fixed command sequences built by this wrapper; the model never supplies
 free-form config.
 
-**This is 0.3.1**, the fixes from the first live check of 0.3.0 (see
+**This is 0.3.2**, the fixes from the read-only retest of 0.3.1 and a
+rebuilt SSH session handling (see [What is new in 0.3.2](#what-is-new-in-032)).
+0.3.1 fixed the first live check of 0.3.0 (see
 [What is new in 0.3.1](#what-is-new-in-031)). 0.3.0 added parsed JSON read tools (`health_summary`,
 `port_status`, `port_counters`, `counters_delta`, `mac_table`,
 `lldp_neighbors`, `poe_status`), masked config reads and backups
@@ -23,7 +25,7 @@ write, checks device output for `%` and returns a before/after diff.
 Device text is redacted fail-closed, line by line. Protected ports are
 refused by every new port write tool; caution ports need an explicit
 confirmation. See [What is new in 0.3.0](#what-is-new-in-030) and
-[Retest 0.3.1](#retest-031-network-admin).
+[Retest 0.3.2](#retest-032-network-admin).
 
 0.2.0 added the unlock-gated SNMP tools; 0.1.x was live-tested on an
 LGS328PC with firmware 1.01.02.02 (SSH with `ssh-rsa` via paramiko 4.0.0;
@@ -36,7 +38,7 @@ The intended way to run this server is the packaged entrypoint, pinned to a
 tag:
 
 ```bash
-uvx --from git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.1 netmiko-mcp-linksys
+uvx --from git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.2 netmiko-mcp-linksys
 ```
 
 From a local checkout:
@@ -55,7 +57,7 @@ A compatibility shim, `lgs_mcp.py`, exists only for the older hub invocation
 `python /config/netmiko/lgs_mcp.py`. That file is not a standalone
 implementation: it imports `netmiko_mcp_linksys`. Prefer the `uvx --from ...
 netmiko-mcp-linksys` entry above. If you must keep the old command, add
-`--with git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.1` so the
+`--with git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.2` so the
 package is installed in that environment.
 
 ## Environment variables
@@ -78,7 +80,11 @@ package is installed in that environment.
 | `NETMIKO_MCP_COMMAND_FILE` | yes for `show`, `port_overview` and the parsed read tools | Path to a `commands.yml` allow/deny list. See `examples/commands.yml`. Restart the server after edits (`lru_cache`). |
 | `SWITCH_AUDIT_LOG` | no (recommended) | If set, append JSON lines per tool call: a `"phase": "start"` line with a `call_id` before the tool runs, and the result line with the same `call_id` and `duration_ms`. A start line without a result marks a call that was cut off (hub timeout such as MCP error `-32001`, server restart); `audit_tail` lists it as `unfinished`. The file is created with mode `0600`. Passwords are redacted from parameters and results. There is no default path; unset means no audit (warned at startup). An unwritable path does not break tools: a warning goes to stderr and the result gets an `audit_warning:` line. |
 | `SWITCH_READ_TIMEOUT` | no | Seconds without new output before a command is given up. Also passed to netmiko as `read_timeout_override` (cut to the call budget left). Default `60`, range `1`–`600`. |
-| `SWITCH_CALL_BUDGET` | no | Wall-clock seconds one tool call may spend on the switch: waiting for the session lock, connecting and every command. Default `45`, range `5`–`600`. When it runs out the call ends with a tool error and the SSH session is discarded, so the next call starts on a fresh channel. Keep it about 15 s below the caller's request timeout: MCP clients give up after 60 s by default (MCP error `-32001`); the hub's own `MCP_CALL_TIMEOUT_MS` defaults to 300 s. Applying writes (`dry_run=false`) are not cut by it (a write must not stop between sending and its read-back); they still wait at most one budget for the session lock. |
+| `SWITCH_CALL_BUDGET` | no | Wall-clock seconds one tool call may spend on the switch: waiting for the session lock, connecting and every command. Default `45`, range `5`–`600`. When it runs out the call ends with a tool error; the SSH session is aborted (Ctrl-C), logged out and closed, and the reconnect cooldown starts (`SWITCH_COOLDOWN_BASE`). Keep it about 15 s below the caller's request timeout: MCP clients give up after 60 s by default (MCP error `-32001`); the hub's own `MCP_CALL_TIMEOUT_MS` defaults to 300 s. Applying writes (`dry_run=false`) are not cut by it (a write must not stop between sending and its read-back); they still wait at most one budget for the session lock. |
+| `SWITCH_SESSION_IDLE` | no | Seconds a clean SSH session is kept open for the next call, then logged out with `exit`. Default `10`, range `0`–`300`; `0` logs out after every call. There is never more than one SSH session to the switch (tool calls and the background config dump share it). |
+| `SWITCH_LOGOUT_TIMEOUT` | no | Seconds the switch gets to close the channel after `exit`; after that the transport is closed hard. Default `3`, range `0.5`–`30`. |
+| `SWITCH_COOLDOWN_BASE` | no | Reconnect protection. After a command timeout or a failed or slow connect, no new SSH connection is opened for this many seconds; the call answers `Switch cooling down …; retry in Ns` at once. The cooldown doubles with every further failure in a row and resets after a successful call. Stored in `SWITCH_STATE_DIR/ssh-breaker.json`, so a server restart keeps it. Default `30`, range `0`–`3600`; `0` turns it off. Nothing retries automatically. |
+| `SWITCH_COOLDOWN_MAX` | no | Ceiling of the doubling cooldown. Default `600`, range `1`–`86400`. |
 | `SWITCH_CONFIG_DUMP_TIMEOUT` | no | Limit in seconds for one background running-config dump (`config_read`, `config_backup`, `config_diff`). Default `240`, range `30`–`600`. See `config_read`. |
 | `SWITCH_PAGING_OFF` | no | `1` (default) sends `configure terminal` / `set cli pagination off` / `end` at session start, best effort. `0` skips it; the pager loop handles paging either way. |
 | `SWITCH_SESSION_LOG` | no | Debug only. If set, netmiko appends a session log there (mode `0600`). netmiko masks the password (`no_log`) and only channel reads are recorded. The log does contain full show output (MAC/ARP tables, descriptions); unset it after debugging. An unwritable path disables the log with a warning. |
@@ -103,7 +109,7 @@ until it is set to a valid list, disable and PoE-off are refused.
     "command": "uvx",
     "args": [
       "--python", "3.12",
-      "--from", "git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.1",
+      "--from", "git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.2",
       "netmiko-mcp-linksys"
     ],
     "env": {
@@ -124,6 +130,10 @@ until it is set to a valid list, disable and PoE-off are refused.
       "SWITCH_AUDIT_LOG": "/data/netmiko/switch-audit.log",
       "SWITCH_READ_TIMEOUT": "60",
       "SWITCH_CALL_BUDGET": "45",
+      "SWITCH_SESSION_IDLE": "10",
+      "SWITCH_LOGOUT_TIMEOUT": "3",
+      "SWITCH_COOLDOWN_BASE": "30",
+      "SWITCH_COOLDOWN_MAX": "600",
       "UV_CACHE_DIR": "/data/uv-cache",
       "UV_PYTHON_INSTALL_DIR": "/data/uv-python",
       "UV_TOOL_DIR": "/data/uv-tools",
@@ -627,18 +637,37 @@ Still unconfirmed:
   users/passwords, reboot/reset, SSH off, Telnet on, LAG/STP, `interface
   range`, free-form config.
 
-## Changes after 0.3.1 (unreleased)
+## What is new in 0.3.2
 
-Fixes from the read-only retest of 0.3.1:
+Fixes from the read-only retest of 0.3.1. After that retest the
+switch's SSH service stopped answering; 0.3.2 rebuilds the session
+handling so the server cannot pile up SSH sessions on the switch:
 
+- **SSH sessions:** at most one SSH session to the switch at a time,
+  shared by tool calls and the background config dump. A clean session
+  is kept for `SWITCH_SESSION_IDLE` seconds (default 10) and reused,
+  then logged out with `exit`. A session that ends in a timeout is
+  aborted (Ctrl-C, pager quit, output drained), logged out with `exit`
+  (`end` first in config mode) within `SWITCH_LOGOUT_TIMEOUT`, and only
+  then is the transport closed hard. No session is ever left open.
+- **Connect leak:** netmiko kept an authenticated SSH transport open
+  when opening the shell channel failed during connect (the connection
+  object never reached the caller). The connection is now opened in two
+  steps so a failed connect is always closed.
+- **Reconnect protection:** after a command timeout or a failed or slow
+  connect no new connection is opened for `SWITCH_COOLDOWN_BASE` seconds
+  (default 30, doubling per failure up to `SWITCH_COOLDOWN_MAX`, default
+  600; kept across restarts). Calls answer `Switch cooling down …; retry
+  in Ns` at once. Nothing retries automatically; the only exception is
+  `poe_cycle` switching PoE back on once after a failed cycle.
+- **Shutdown:** on process end (stdin closed, SIGTERM, SIGHUP) the kept
+  session is logged out.
 - **Timeouts and the session hang:** a call that outlived the caller's
   request timeout (MCP `-32001`) kept the session lock, and every later
   call queued behind it, also after `wake_server`. Every call now has a
   wall-clock budget (`SWITCH_CALL_BUDGET`, default 45 s) for the lock
   wait, the connect and each command, also while a device keeps sending.
-  A session that ends in a timeout or error is discarded (transport
-  closed, no graceful logout that waits for a prompt), the lock is free
-  at once, and the next call starts on a fresh channel.
+  The lock wait is bounded, so a hung call cannot block later calls.
 - **config_read / config_backup / config_diff:** the running-config dump
   runs in the background; a slow dump answers `Pending` instead of
   running into the caller's timeout, and the next call gets the result.
@@ -697,7 +726,7 @@ Fixes from the first live check of 0.3.0 on the LGS328PC (firmware
   addresses. The listing is complete, so the gap is the device's
   counting; `count_note` reports it instead of guessing.
 
-## Retest after 0.3.2 fixes (network admin)
+## Retest 0.3.2 (network admin)
 
 1. `config_read()`: masked running-config, or `Pending` first and the
    result on the next call. No hub timeout. Then `config_backup()` and
@@ -711,6 +740,14 @@ Fixes from the first live check of 0.3.0 on the LGS328PC (firmware
    with `dry_run=true` refuse `Gi0/10` and `Gi0/24` as protected ports.
 6. `audit_tail`: finished calls with `duration_ms`, cut-off ones as
    `unfinished` with `age_ms`.
+7. Sessions: restart the MCP server once after the update so SSH
+   sessions left by 0.3.1 are gone, and check in the switch's web UI
+   that no old SSH sessions remain. Two read calls within 10 s use one
+   login (audit log, switch log); about 10 s after the last call the
+   session is gone again.
+8. Cooldown: one `show users` that runs into the call budget is
+   followed by `Switch cooling down …; retry in 30s` for the next call,
+   without a new login. After the cooldown one call works again.
 
 ## Retest 0.3.1 (network admin)
 

@@ -140,7 +140,8 @@ def test_run_save_end_to_end_with_confirmation(monkeypatch: pytest.MonkeyPatch) 
         ]
     )
     out = _run_save_with(chan, monkeypatch)
-    assert chan.writes == ["save\n", "y\n"]
+    # The clean session ends with a plain logout, no abort.
+    assert chan.writes == ["save\n", "y\n", "exit\n"]
     assert "Copy succeeded" in out
     chan.disconnect.assert_called_once()
 
@@ -155,7 +156,11 @@ def test_run_save_unknown_prompt_fails_closed(monkeypatch: pytest.MonkeyPatch) -
     assert "Whether startup-config was written is unknown" in message
     assert "Overwrite ***?" in message
     assert password not in message
-    assert chan.writes == ["save\n"]
+    # Nothing but 'save' was answered; the unknown prompt is aborted
+    # (Ctrl-C, clear line), then the session is logged out.
+    assert chan.writes[0] == "save\n"
+    assert "y\n" not in chan.writes
+    assert chan.writes[1] == "\x03" and chan.writes[-1] == "exit\n"
     chan.disconnect.assert_called_once()
 
 

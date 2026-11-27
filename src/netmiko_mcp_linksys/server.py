@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import atexit
 import functools
 import inspect
 import json
 import os
 import re
+import signal
 import sys
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -17,7 +19,7 @@ from typing import Any
 from mcp.server import MCPServer
 from netmiko_mcp.security import validate_command
 
-from netmiko_mcp_linksys import configstore, readtools, writes, writetools
+from netmiko_mcp_linksys import configstore, connection, readtools, writes, writetools
 from netmiko_mcp_linksys.audit import audited_call, check_audit_path
 from netmiko_mcp_linksys.connection import (
     CONFIG_ERROR_PATTERN,
@@ -1390,11 +1392,37 @@ for _function in ALL_TOOLS:
     )
 
 
+def _install_signal_handlers() -> None:
+    """Log out of the switch on SIGTERM/SIGHUP too (hub stop, restart),
+    not only on a normal end of stdin; atexit covers interpreter exit."""
+    atexit.register(connection.shutdown)
+
+    def _stop(signum: int, _frame: Any) -> None:
+        connection.shutdown()
+        raise SystemExit(128 + signum)
+
+    for name in ("SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, _stop)
+        except (ValueError, OSError):  # not the main thread / not supported
+            pass
+
+
 def main() -> None:
-    """Start the stdio MCP server. Does not open an SSH session."""
+    """Start the stdio MCP server. Does not open an SSH session.
+
+    On exit the kept SSH session is logged out (graceful shutdown).
+    """
     prepare_runtime()
     startup_checks()
-    mcp.run(transport="stdio")
+    _install_signal_handlers()
+    try:
+        mcp.run(transport="stdio")
+    finally:
+        connection.shutdown()
 
 
 if __name__ == "__main__":
