@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    env:
+      # TEST-NET-1 only. Tests are mocked and must never reach a live switch.
+      # conftest.py also forces these values so a runner env cannot override them.
+      SWITCH_HOST: "192.0.2.10"
+      SWITCH_USER: "dummy-user"
+      SWITCH_PASSWORD: "dummy-password-not-real"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install uv and Python
+        # setup-uv publishes no moving v10 tag (majors stop at v7); pin the current 10.x release.
+        uses: astral-sh/setup-uv@v10.4.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Run tests
+        run: uv run --extra dev pytest
