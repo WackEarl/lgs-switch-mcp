@@ -14,8 +14,8 @@ import re
 import time
 from typing import Any
 
-from netmiko_mcp_linksys import configstore, writes
-from netmiko_mcp_linksys.commands import (
+from lgs_switch_mcp import configstore, writes
+from lgs_switch_mcp.commands import (
     CABLE_DIAG,
     HTTP_DISABLE,
     HTTP_ENABLE,
@@ -41,7 +41,7 @@ from netmiko_mcp_linksys.commands import (
     build_storm_control_commands,
     build_syslog_commands,
 )
-from netmiko_mcp_linksys.connection import (
+from lgs_switch_mcp.connection import (
     CONFIG_ERROR_PATTERN,
     SwitchConnectionError,
     _send_config,
@@ -49,10 +49,10 @@ from netmiko_mcp_linksys.connection import (
     send_paged,
     send_paged_redacted,
 )
-from netmiko_mcp_linksys.errors import wrap_transport_error
-from netmiko_mcp_linksys.redaction import redact_device_text
-from netmiko_mcp_linksys.toolkit import fail, ok
-from netmiko_mcp_linksys.validation import (
+from lgs_switch_mcp.errors import wrap_transport_error
+from lgs_switch_mcp.redaction import redact_device_text
+from lgs_switch_mcp.toolkit import fail, ok
+from lgs_switch_mcp.validation import (
     RATE_DIRECTIONS,
     STORM_TYPES,
     SYSLOG_FACILITIES,

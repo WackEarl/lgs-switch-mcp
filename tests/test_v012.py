@@ -7,14 +7,14 @@ from unittest.mock import patch
 
 import pytest
 
-from netmiko_mcp_linksys.connection import (
+from lgs_switch_mcp.connection import (
     PAGE_BREAK,
     READBACK_DESCRIPTION,
     build_description_commands,
     clean_output,
     send_paged,
 )
-from netmiko_mcp_linksys.server import (
+from lgs_switch_mcp.server import (
     description_readback_note,
     parse_interface_description,
     port_set_description,
@@ -61,7 +61,7 @@ def test_clear_description_is_unquoted() -> None:
 
 @pytest.mark.parametrize("text", ['Repeater "EG"', "Repeater 'EG'", 'a"b'])
 def test_quotes_in_input_still_rejected(text: str) -> None:
-    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
+    with patch("lgs_switch_mcp.writes.run_in_session") as run:
         result = port_set_description("0/7", text)
     run.assert_not_called()
     assert result.startswith("Rejected:")
@@ -282,7 +282,7 @@ def test_clean_output_without_page_break_keeps_blank_lines() -> None:
 def test_unterminated_osc_does_not_eat_line():
     import re as _re
 
-    from netmiko_mcp_linksys.connection import clean_output
+    from lgs_switch_mcp.connection import clean_output
     out = clean_output("\x1b]0 real line\nLGS328PC#", "", _re.compile(r"^LGS328PC#\s*$"))
     assert "real line" in out
 
@@ -290,7 +290,7 @@ def test_unterminated_osc_does_not_eat_line():
 def test_terminated_osc_is_stripped():
     import re as _re
 
-    from netmiko_mcp_linksys.connection import clean_output
+    from lgs_switch_mcp.connection import clean_output
     out = clean_output("\x1b]0;title\x07Gi0/1 up\nLGS328PC#", "", _re.compile(r"^LGS328PC#\s*$"))
     assert "Gi0/1 up" in out and "title" not in out
 
@@ -298,7 +298,7 @@ def test_terminated_osc_is_stripped():
 def test_whitespace_only_description_rejected():
     import pytest as _pytest
 
-    from netmiko_mcp_linksys.validation import ValidationError, validate_description
+    from lgs_switch_mcp.validation import ValidationError, validate_description
     with _pytest.raises(ValidationError):
         validate_description("   ")
 

@@ -16,17 +16,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from netmiko_mcp_linksys import configdump, configstore, tables
-from netmiko_mcp_linksys.audit import audit_path
-from netmiko_mcp_linksys.commands import STARTUP_UNAVAILABLE
-from netmiko_mcp_linksys.connection import (
+from lgs_switch_mcp import configdump, configstore, tables
+from lgs_switch_mcp.audit import audit_path
+from lgs_switch_mcp.commands import STARTUP_UNAVAILABLE
+from lgs_switch_mcp.connection import (
     SwitchConnectionError,
     run_in_session,
     run_show_sequence,
     send_help,
 )
-from netmiko_mcp_linksys.redaction import redact_device_text
-from netmiko_mcp_linksys.toolkit import (
+from lgs_switch_mcp.redaction import redact_device_text
+from lgs_switch_mcp.toolkit import (
     COMMAND_FILE_MISSING,
     command_file_ready,
     fail,
@@ -34,13 +34,13 @@ from netmiko_mcp_linksys.toolkit import (
     ok,
     to_json,
 )
-from netmiko_mcp_linksys.validation import (
+from lgs_switch_mcp.validation import (
     ValidationError,
     redact_secrets,
     validate_int,
     validate_port,
 )
-from netmiko_mcp_linksys.writes import ConfigUnavailableError
+from lgs_switch_mcp.writes import ConfigUnavailableError
 
 COUNTERS_STATE = "counters.json"
 AUDIT_TAIL_MAX = 500

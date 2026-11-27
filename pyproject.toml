@@ -1,5 +1,5 @@
 [project]
-name = "netmiko-mcp-linksys"
+name = "lgs-switch-mcp"
 version = "0.3.2"
 description = "stdio MCP wrapper based on netmiko and netmiko-mcp for Linksys LGS-series switches"
 readme = "README.md"
@@ -14,7 +14,8 @@ dependencies = [
 ]
 
 [project.scripts]
-netmiko-mcp-linksys = "netmiko_mcp_linksys.server:main"
+lgs-switch-mcp = "lgs_switch_mcp.server:main"
+netmiko-mcp-linksys = "lgs_switch_mcp.compat:deprecated_main"
 
 [project.optional-dependencies]
 dev = [
@@ -26,7 +27,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/netmiko_mcp_linksys"]
+packages = ["src/lgs_switch_mcp", "src/netmiko_mcp_linksys"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

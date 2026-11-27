@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import re
 
-from netmiko_mcp_linksys.validation import redact_secrets
+from lgs_switch_mcp.validation import redact_secrets
 
 REDACTED = "[REDACTED]"
 REDACTED_LINE = "[REDACTED-LINE]"

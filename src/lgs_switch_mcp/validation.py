@@ -6,7 +6,7 @@ import os
 import re
 from collections.abc import Sequence
 
-from netmiko_mcp_linksys.output import strip_controls
+from lgs_switch_mcp.output import strip_controls
 
 PORT_RE = re.compile(r"^0/([1-9]|1[0-9]|2[0-8])$")
 POE_PORT_RE = re.compile(r"^0/([1-9]|1[0-9]|2[0-4])$")

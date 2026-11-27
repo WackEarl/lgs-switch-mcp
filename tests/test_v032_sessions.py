@@ -16,15 +16,15 @@ from unittest.mock import patch
 
 import pytest
 
-from netmiko_mcp_linksys import configdump, connection
-from netmiko_mcp_linksys.connection import (
+from lgs_switch_mcp import configdump, connection
+from lgs_switch_mcp.connection import (
     SwitchConnectionError,
     call_deadline,
     run_show,
     send_paged,
     session,
 )
-from netmiko_mcp_linksys.validation import ValidationError
+from lgs_switch_mcp.validation import ValidationError
 
 PROMPT = "LGS328PC#"
 
@@ -134,7 +134,7 @@ def connects(*conns: FakeConn) -> Any:
         assert params.get("auto_connect") is False
         return queue.pop(0)
 
-    return patch("netmiko_mcp_linksys.connection.ConnectHandler", side_effect=factory)
+    return patch("lgs_switch_mcp.connection.ConnectHandler", side_effect=factory)
 
 
 # --------------------------------------------- clean logout after a timeout
@@ -486,7 +486,7 @@ def test_shutdown_hard_closes_a_session_in_use() -> None:
 
 
 def test_main_registers_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys import server
+    from lgs_switch_mcp import server
 
     calls: list[str] = []
     monkeypatch.setattr(server, "prepare_runtime", lambda: None)
@@ -501,7 +501,7 @@ def test_main_registers_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_breaker_state_file_is_plain_json(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWITCH_COOLDOWN_BASE", "30")
     connection._BREAKER.failure("a command timeout")
-    from netmiko_mcp_linksys import configstore
+    from lgs_switch_mcp import configstore
 
     data = configstore.read_state(connection.BREAKER_STATE)
     assert data["failures"] == 1 and data["reason"] == "a command timeout"

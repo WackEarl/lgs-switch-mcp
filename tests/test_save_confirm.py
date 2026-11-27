@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from netmiko_mcp_linksys.connection import (
+from lgs_switch_mcp.connection import (
     SAVE_CONFIRM_ANSWER,
     SAVE_CONFIRM_RE,
     SwitchConnectionError,
@@ -128,7 +128,7 @@ def test_show_never_answers_confirmation() -> None:
 def _run_save_with(chan: ScriptedChannel, monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv("SWITCH_PAGING_OFF", "0")
     monkeypatch.setenv("SWITCH_READ_TIMEOUT", "1")
-    with patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=chan):
+    with patch("lgs_switch_mcp.connection.ConnectHandler", return_value=chan):
         return run_save()
 
 
@@ -176,7 +176,7 @@ def test_run_save_error_after_confirmation(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_save_config_tool_reports_unknown_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys.server import save_config
+    from lgs_switch_mcp.server import save_config
 
     chan = ScriptedChannel([["save\r\n", "Are you sure? "]])
     monkeypatch.setenv("SWITCH_PAGING_OFF", "0")
@@ -185,8 +185,8 @@ def test_save_config_tool_reports_unknown_state(monkeypatch: pytest.MonkeyPatch)
         raise SwitchConnectionError(f"show {source}-config is not available")
 
     with (
-        patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=chan),
-        patch("netmiko_mcp_linksys.server.read_config", side_effect=no_config),
+        patch("lgs_switch_mcp.connection.ConnectHandler", return_value=chan),
+        patch("lgs_switch_mcp.server.read_config", side_effect=no_config),
     ):
         result = save_config(dry_run=False)
     assert result.startswith("Error: save did not complete")
@@ -200,9 +200,9 @@ def test_run_save_unexpected_error_reports_unknown_state(
     monkeypatch.setenv("SWITCH_PAGING_OFF", "0")
     conn = MagicMock()
     with (
-        patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=conn),
+        patch("lgs_switch_mcp.connection.ConnectHandler", return_value=conn),
         patch(
-            "netmiko_mcp_linksys.connection.send_paged",
+            "lgs_switch_mcp.connection.send_paged",
             side_effect=OSError(f"socket closed {password}"),
         ),
         pytest.raises(SwitchConnectionError) as excinfo,

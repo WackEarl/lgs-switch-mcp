@@ -26,7 +26,7 @@ from typing import Any
 
 from netmiko import ConnectHandler
 
-from netmiko_mcp_linksys.commands import (
+from lgs_switch_mcp.commands import (
     READBACK_DESCRIPTION,
     READBACK_INTERFACE,
     READBACK_POE,
@@ -34,8 +34,8 @@ from netmiko_mcp_linksys.commands import (
     build_description_commands,
     build_poe_commands,
 )
-from netmiko_mcp_linksys.errors import SwitchConnectionError, wrap_transport_error
-from netmiko_mcp_linksys.parser import (
+from lgs_switch_mcp.errors import SwitchConnectionError, wrap_transport_error
+from lgs_switch_mcp.parser import (
     MAX_PAGES,
     PAGE_BREAK,
     PAGER_RE,
@@ -43,12 +43,12 @@ from netmiko_mcp_linksys.parser import (
     prompt_regex,
     visible_tail,
 )
-from netmiko_mcp_linksys.redaction import redact_device_text, redact_sensitive_lines
-from netmiko_mcp_linksys.snmp_cli import (
+from lgs_switch_mcp.redaction import redact_device_text, redact_sensitive_lines
+from lgs_switch_mcp.snmp_cli import (
     redact_community_listing,
     redact_community_name_fields,
 )
-from netmiko_mcp_linksys.validation import (
+from lgs_switch_mcp.validation import (
     ValidationError,
     config_output_is_error,
     redact_secrets,
@@ -105,7 +105,7 @@ def warn(message: str, *, once_key: str | None = None) -> None:
         if once_key in _warned:
             return
         _warned.add(once_key)
-    print(f"netmiko-mcp-linksys: warning: {redact_secrets(message)}", file=sys.stderr, flush=True)
+    print(f"lgs-switch-mcp: warning: {redact_secrets(message)}", file=sys.stderr, flush=True)
 
 
 def read_timeout() -> float:
@@ -476,7 +476,7 @@ class _Breaker:
         if self.loaded:
             return
         self.loaded = True
-        from netmiko_mcp_linksys import configstore  # no import cycle at module load
+        from lgs_switch_mcp import configstore  # no import cycle at module load
 
         data = configstore.read_state(BREAKER_STATE) or {}
         try:
@@ -487,7 +487,7 @@ class _Breaker:
             self.failures, self.until, self.reason = 0, 0.0, ""
 
     def _save(self) -> None:
-        from netmiko_mcp_linksys import configstore
+        from lgs_switch_mcp import configstore
 
         try:
             if self.failures:
@@ -563,7 +563,7 @@ def _acquire_lock() -> None:
         raise SwitchConnectionError(BUSY_MESSAGE.format(waited=max(0.0, round(wait, 1))))
 
 
-_DIRTY_ATTR = "_netmiko_mcp_linksys_dirty"
+_DIRTY_ATTR = "_lgs_switch_mcp_dirty"
 
 
 def _mark_dirty(conn: Any) -> None:

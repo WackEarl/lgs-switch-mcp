@@ -8,12 +8,12 @@ from unittest.mock import patch
 import pytest
 from netmiko.exceptions import ConfigInvalidException
 
-from netmiko_mcp_linksys.connection import (
+from lgs_switch_mcp.connection import (
     SwitchConnectionError,
     redact_session_log_file,
     redact_show_output,
 )
-from netmiko_mcp_linksys.snmp_cli import (
+from lgs_switch_mcp.snmp_cli import (
     READBACK_SNMP_ACCESS,
     READBACK_SNMP_COMMUNITY,
     READBACK_SNMP_GROUP,
@@ -47,7 +47,7 @@ from netmiko_mcp_linksys.snmp_cli import (
     view_is_restricted,
     view_is_write_safe,
 )
-from netmiko_mcp_linksys.validation import (
+from lgs_switch_mcp.validation import (
     ValidationError,
     redact_secrets,
     validate_community_remove_name,
@@ -350,7 +350,7 @@ def test_redact_in_exception_message(community_env: str) -> None:
 
 
 def test_audit_redacts_community(audit_log, community_env: str) -> None:
-    from netmiko_mcp_linksys.audit import write_audit
+    from lgs_switch_mcp.audit import write_audit
 
     write_audit(
         tool="snmp_community_create",
@@ -519,8 +519,8 @@ def _fake_snmp_session(
 
     def fake_session(callback: Any, **_kwargs: Any) -> str:
         with (
-            patch("netmiko_mcp_linksys.server._snmp_exec", side_effect=exec_cmd),
-            patch("netmiko_mcp_linksys.server._send_config", side_effect=send),
+            patch("lgs_switch_mcp.server._snmp_exec", side_effect=exec_cmd),
+            patch("lgs_switch_mcp.server._send_config", side_effect=send),
         ):
             return callback(object())
 
@@ -528,14 +528,14 @@ def _fake_snmp_session(
 
 
 def test_snmp_view_create_tool() -> None:
-    from netmiko_mcp_linksys.server import snmp_view_create
+    from lgs_switch_mcp.server import snmp_view_create
 
     sent: list[list[str]] = []
     session = _fake_snmp_session(
         {READBACK_SNMP_ACCESS: ACCESS_SHOW_RW, READBACK_SNMP_VIEW: VIEW_SHOW_RESTRICTED},
         sent,
     )
-    with patch("netmiko_mcp_linksys.server.run_in_session", side_effect=session):
+    with patch("lgs_switch_mcp.server.run_in_session", side_effect=session):
         result = snmp_view_create("ifmib", "interfaces", dry_run=False)
     assert sent == [["snmp view ifmib 1.3.6.1.2.1.2 included"]]
     assert "--- show snmp viewtree ---" in result
@@ -544,9 +544,9 @@ def test_snmp_view_create_tool() -> None:
 
 
 def test_snmp_view_create_rejects_bad_oid() -> None:
-    from netmiko_mcp_linksys.server import snmp_view_create
+    from lgs_switch_mcp.server import snmp_view_create
 
-    with patch("netmiko_mcp_linksys.server.run_in_session") as run:
+    with patch("lgs_switch_mcp.server.run_in_session") as run:
         result = snmp_view_create("ifmib", "1.3.6.1.2.1.1", dry_run=False)
     run.assert_not_called()
     assert result.startswith("Rejected:")
@@ -554,7 +554,7 @@ def test_snmp_view_create_rejects_bad_oid() -> None:
 
 
 def test_snmp_community_create_and_redaction(community_env: str) -> None:
-    from netmiko_mcp_linksys.server import snmp_community_create
+    from lgs_switch_mcp.server import snmp_community_create
 
     shows = {
         READBACK_SNMP_VIEW: VIEW_SHOW_RESTRICTED,
@@ -569,10 +569,10 @@ def test_snmp_community_create_and_redaction(community_env: str) -> None:
 
         with (
             patch(
-                "netmiko_mcp_linksys.server._snmp_exec",
+                "lgs_switch_mcp.server._snmp_exec",
                 side_effect=lambda conn, command: shows[command],
             ),
-            patch("netmiko_mcp_linksys.server._send_config", return_value="ok") as sent,
+            patch("lgs_switch_mcp.server._send_config", return_value="ok") as sent,
         ):
             result = callback(Conn())
             sent.assert_called_once()
@@ -580,7 +580,7 @@ def test_snmp_community_create_and_redaction(community_env: str) -> None:
             assert sent_cmds[-1] == f"snmp community name {SECRET} security ifmib_sec"
         return result
 
-    with patch("netmiko_mcp_linksys.server.run_in_session", side_effect=fake_session):
+    with patch("lgs_switch_mcp.server.run_in_session", side_effect=fake_session):
         result = snmp_community_create("ifmib", "rw", "ifmib_w", dry_run=False)
     assert SECRET not in result
     assert "[REDACTED]" in result
@@ -590,10 +590,10 @@ def test_snmp_community_create_and_redaction(community_env: str) -> None:
 
 
 def test_snmp_community_create_requires_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys.server import snmp_community_create
+    from lgs_switch_mcp.server import snmp_community_create
 
     monkeypatch.delenv("SWITCH_SNMP_COMMUNITY", raising=False)
-    with patch("netmiko_mcp_linksys.server.run_in_session") as run:
+    with patch("lgs_switch_mcp.server.run_in_session") as run:
         result = snmp_community_create("ifmib", "rw", dry_run=False)
     run.assert_not_called()
     assert result.startswith("Rejected:")
@@ -601,29 +601,29 @@ def test_snmp_community_create_requires_env(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_snmp_community_create_refuses_missing_view(community_env: str) -> None:
-    from netmiko_mcp_linksys.server import snmp_community_create
+    from lgs_switch_mcp.server import snmp_community_create
 
     def fake_session(callback: Any, **_kwargs: Any) -> str:
         with (
             patch(
-                "netmiko_mcp_linksys.server._snmp_exec",
+                "lgs_switch_mcp.server._snmp_exec",
                 return_value=VIEW_SHOW_RESTRICTED,
             ),
-            patch("netmiko_mcp_linksys.server._send_config") as sent,
+            patch("lgs_switch_mcp.server._send_config") as sent,
         ):
             try:
                 return callback(object())
             finally:
                 sent.assert_not_called()
 
-    with patch("netmiko_mcp_linksys.server.run_in_session", side_effect=fake_session):
+    with patch("lgs_switch_mcp.server.run_in_session", side_effect=fake_session):
         result = snmp_community_create("missingview", "ro", dry_run=False)
     assert result.startswith("Rejected:")
     assert "was not found" in result
 
 
 def test_snmp_community_remove_happy_path(community_env: str) -> None:
-    from netmiko_mcp_linksys.server import snmp_community_remove
+    from lgs_switch_mcp.server import snmp_community_remove
 
     after = """
 Community Index: ifmib
@@ -650,15 +650,15 @@ Security Name: none
 
     def fake_session(callback: Any, **_kwargs: Any) -> str:
         with (
-            patch("netmiko_mcp_linksys.server._snmp_exec", side_effect=exec_cmd),
-            patch("netmiko_mcp_linksys.server._send_config", return_value="ok") as sent,
+            patch("lgs_switch_mcp.server._snmp_exec", side_effect=exec_cmd),
+            patch("lgs_switch_mcp.server._send_config", return_value="ok") as sent,
         ):
             result = callback(object())
             sent.assert_called_once()
             assert sent.call_args.args[1] == ["no snmp community name public"]
         return result
 
-    with patch("netmiko_mcp_linksys.server.run_in_session", side_effect=fake_session):
+    with patch("lgs_switch_mcp.server.run_in_session", side_effect=fake_session):
         result = snmp_community_remove("public", dry_run=False)
     assert SECRET not in result
     assert "no longer present" in result
@@ -668,7 +668,7 @@ Security Name: none
 def test_snmp_community_remove_refuses_without_configured(
     community_env: str,
 ) -> None:
-    from netmiko_mcp_linksys.server import snmp_community_remove
+    from lgs_switch_mcp.server import snmp_community_remove
 
     only_defaults = """
 Community Index: public
@@ -689,15 +689,15 @@ Security Name: none
             raise AssertionError(command)
 
         with (
-            patch("netmiko_mcp_linksys.server._snmp_exec", side_effect=exec_cmd),
-            patch("netmiko_mcp_linksys.server._send_config") as sent,
+            patch("lgs_switch_mcp.server._snmp_exec", side_effect=exec_cmd),
+            patch("lgs_switch_mcp.server._send_config") as sent,
         ):
             try:
                 return callback(object())
             finally:
                 sent.assert_not_called()
 
-    with patch("netmiko_mcp_linksys.server.run_in_session", side_effect=fake_session):
+    with patch("lgs_switch_mcp.server.run_in_session", side_effect=fake_session):
         result = snmp_community_remove("public", dry_run=False)
     assert result.startswith("Rejected:")
     assert "not present" in result
@@ -705,9 +705,9 @@ Security Name: none
 
 
 def test_snmp_community_remove_refuses_configured_name(community_env: str) -> None:
-    from netmiko_mcp_linksys.server import snmp_community_remove
+    from lgs_switch_mcp.server import snmp_community_remove
 
-    with patch("netmiko_mcp_linksys.server.run_in_session") as run:
+    with patch("lgs_switch_mcp.server.run_in_session") as run:
         result = snmp_community_remove(SECRET, dry_run=False)
     run.assert_not_called()
     assert result.startswith("Rejected:")
@@ -716,7 +716,7 @@ def test_snmp_community_remove_refuses_configured_name(community_env: str) -> No
 
 
 def test_snmp_user_remove_and_already_absent() -> None:
-    from netmiko_mcp_linksys.server import snmp_user_remove
+    from lgs_switch_mcp.server import snmp_user_remove
 
     def fake_session_present(callback: Any, **_kwargs: Any) -> str:
         after = USER_SHOW.replace("noAuthUser", "goneUser")
@@ -733,8 +733,8 @@ def test_snmp_user_remove_and_already_absent() -> None:
             return text
 
         with (
-            patch("netmiko_mcp_linksys.server._snmp_exec", side_effect=counted),
-            patch("netmiko_mcp_linksys.server._send_config", return_value="ok") as sent,
+            patch("lgs_switch_mcp.server._snmp_exec", side_effect=counted),
+            patch("lgs_switch_mcp.server._send_config", return_value="ok") as sent,
         ):
             result = callback(object())
             sent.assert_called_once()
@@ -742,7 +742,7 @@ def test_snmp_user_remove_and_already_absent() -> None:
         return result
 
     with patch(
-        "netmiko_mcp_linksys.server.run_in_session", side_effect=fake_session_present
+        "lgs_switch_mcp.server.run_in_session", side_effect=fake_session_present
     ):
         result = snmp_user_remove("noAuthUser", dry_run=False)
     assert "no longer present" in result
@@ -751,17 +751,17 @@ def test_snmp_user_remove_and_already_absent() -> None:
     def fake_session_absent(callback: Any, **_kwargs: Any) -> str:
         with (
             patch(
-                "netmiko_mcp_linksys.server._snmp_exec",
+                "lgs_switch_mcp.server._snmp_exec",
                 return_value="User                    : templateMD5\n",
             ),
-            patch("netmiko_mcp_linksys.server._send_config") as sent,
+            patch("lgs_switch_mcp.server._send_config") as sent,
         ):
             result = callback(object())
             sent.assert_not_called()
         return result
 
     with patch(
-        "netmiko_mcp_linksys.server.run_in_session", side_effect=fake_session_absent
+        "lgs_switch_mcp.server.run_in_session", side_effect=fake_session_absent
     ):
         result = snmp_user_remove("noAuthUser", dry_run=False)
     assert "was not present" in result
@@ -773,10 +773,10 @@ def test_show_snmp_community_is_allowed_and_redacted(
     community_env: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from netmiko_mcp_linksys.server import show
+    from lgs_switch_mcp.server import show
 
     monkeypatch.setattr(
-        "netmiko_mcp_linksys.server.run_show",
+        "lgs_switch_mcp.server.run_show",
         lambda cmd: redact_show_output(cmd, COMMUNITY_SHOW),
     )
     result = show("show snmp community")
@@ -786,7 +786,7 @@ def test_show_snmp_community_is_allowed_and_redacted(
 
 
 def test_show_snmp_bare_still_denied(reset_command_file: None) -> None:
-    from netmiko_mcp_linksys.server import show
+    from lgs_switch_mcp.server import show
 
     result = show("show snmp")
     assert result.startswith("Command rejected:")
@@ -835,7 +835,7 @@ def _run_snmp_tool(
     shows: dict[str, Any],
     *args: Any,
 ) -> str:
-    from netmiko_mcp_linksys import connection, server
+    from lgs_switch_mcp import connection, server
 
     def fake_paged(_conn: Any, command: str, *_a: Any, **_k: Any) -> str:
         value = shows.get(command, "")
@@ -940,7 +940,7 @@ def test_cody_short_invalid_env_does_not_mangle_output(
     assert redact_secrets("Gi0/1 admin state up") == "Gi0/1 admin state up"
     monkeypatch.setenv("SWITCH_SNMP_COMMUNITY", "1")
     assert redact_secrets("Gi0/1 1.3.6.1.2.1.31") == "Gi0/1 1.3.6.1.2.1.31"
-    from netmiko_mcp_linksys.server import startup_checks
+    from lgs_switch_mcp.server import startup_checks
 
     warnings = startup_checks()
     assert any("invalid" in item or "not used" in item or "SWITCH_SNMP_COMMUNITY" in item for item in warnings)
@@ -1003,7 +1003,7 @@ def test_cody_verification_is_exact_but_device_spelling_is_redacted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Finding 11: verification is exact; redaction still covers the device spelling."""
-    from netmiko_mcp_linksys.snmp_cli import find_community_entry, parse_snmp_community
+    from lgs_switch_mcp.snmp_cli import find_community_entry, parse_snmp_community
 
     monkeypatch.setenv("SWITCH_SNMP_COMMUNITY", "haifmibcomm9X")
     entry = find_community_entry(parse_snmp_community(COMMUNITY_SHOW), "haifmibcomm9X")
@@ -1082,7 +1082,7 @@ def test_cody_snmp_tools_disable_session_log(
     community_env: str, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Finding 7: SNMP write tools must not open a session log."""
-    from netmiko_mcp_linksys import connection, server
+    from lgs_switch_mcp import connection, server
 
     log = tmp_path / "session.log"
     monkeypatch.setenv("SWITCH_SESSION_LOG", str(log))
@@ -1144,7 +1144,7 @@ def test_cody_write_tools_require_enable_flag(
     community_env: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Finding 8: SWITCH_SNMP_WRITE_ENABLED=1 is required and off by default."""
-    from netmiko_mcp_linksys.server import (
+    from lgs_switch_mcp.server import (
         snmp_community_create,
         snmp_community_remove,
         snmp_user_remove,
@@ -1153,7 +1153,7 @@ def test_cody_write_tools_require_enable_flag(
     )
 
     monkeypatch.delenv("SWITCH_SNMP_WRITE_ENABLED", raising=False)
-    with patch("netmiko_mcp_linksys.server.run_in_session") as run:
+    with patch("lgs_switch_mcp.server.run_in_session") as run:
         view = snmp_view_create("ifmib", "interfaces", dry_run=False)
         write_view = snmp_write_view_create("ifmib_w", "ifAdminStatus", dry_run=False)
         create = snmp_community_create("ifmib", "rw", "ifmib_w", dry_run=False)
@@ -1180,7 +1180,7 @@ def test_cody_readback_exception_after_send_is_verification_failed(
 
     later.calls = 0  # type: ignore[attr-defined]
 
-    from netmiko_mcp_linksys import connection, server
+    from lgs_switch_mcp import connection, server
 
     with (
         patch.object(connection, "connect_params", lambda **_k: {}),
@@ -1297,7 +1297,7 @@ def test_cody_redact_secrets_strips_ansi_and_prompt_redraws(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Retest A: elsewhere, ANSI and prompt redraws are stripped before redaction."""
-    from netmiko_mcp_linksys.validation import redact_secrets
+    from lgs_switch_mcp.validation import redact_secrets
 
     secret = "HaIfMibComm9xLong_42"
     monkeypatch.setenv("SWITCH_SNMP_COMMUNITY", secret)
@@ -1337,7 +1337,7 @@ def test_cody_readback_readtimeout_after_send_is_verification_failed(
 
     later.calls = 0  # type: ignore[attr-defined]
 
-    from netmiko_mcp_linksys import connection, server
+    from lgs_switch_mcp import connection, server
 
     with (
         patch.object(connection, "connect_params", lambda **_k: {}),
@@ -1358,7 +1358,7 @@ def test_cody_show_tool_disables_session_log_for_snmp_shows(
     community_env: str, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Retest C: show snmp community/viewtree/user must not open a session log."""
-    from netmiko_mcp_linksys import connection, server
+    from lgs_switch_mcp import connection, server
 
     log = tmp_path / "session.log"
     monkeypatch.setenv("SWITCH_SESSION_LOG", str(log))
@@ -1430,7 +1430,7 @@ def test_cody_no_terminal_width_helper() -> None:
     """Retest D: cisco_s300 already sends terminal width 511; no extra helper."""
     import inspect
 
-    from netmiko_mcp_linksys import connection
+    from lgs_switch_mcp import connection
 
     assert not hasattr(connection, "_set_terminal_width_best_effort")
     assert "wide_terminal" not in inspect.signature(connection.session).parameters
@@ -1577,8 +1577,8 @@ def test_community_commands_require_split_views() -> None:
 
 def test_protected_index_envs_are_gone() -> None:
     """The view-level port exclusions and their envs were removed on purpose."""
-    import netmiko_mcp_linksys.snmp_cli as cli
-    import netmiko_mcp_linksys.validation as val
+    import lgs_switch_mcp.snmp_cli as cli
+    import lgs_switch_mcp.validation as val
 
     for module in (cli, val):
         for name in (
@@ -1884,9 +1884,9 @@ def _rw_listing(new_view: str) -> dict[str, str]:
     ["power-ethernet", "1.3.6.1.2.1.105", "interfaces", "1.3.6.1.2.1.31", "ifmib"],
 )
 def test_snmp_write_view_create_refuses_whole_subtrees(subtree: str) -> None:
-    from netmiko_mcp_linksys.server import snmp_write_view_create
+    from lgs_switch_mcp.server import snmp_write_view_create
 
-    with patch("netmiko_mcp_linksys.server.run_in_session") as run:
+    with patch("lgs_switch_mcp.server.run_in_session") as run:
         result = snmp_write_view_create("ifmib_w", subtree, dry_run=False)
     run.assert_not_called()
     assert result.startswith("Rejected:")
@@ -1907,10 +1907,10 @@ def test_snmp_write_view_create_needs_no_index_envs(monkeypatch: pytest.MonkeyPa
 
 
 def test_snmp_write_view_create_requires_write_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys.server import snmp_write_view_create
+    from lgs_switch_mcp.server import snmp_write_view_create
 
     monkeypatch.delenv("SWITCH_SNMP_WRITE_ENABLED")
-    with patch("netmiko_mcp_linksys.server.run_in_session") as run:
+    with patch("lgs_switch_mcp.server.run_in_session") as run:
         result = snmp_write_view_create("ifmib_w", "pethPsePortAdminEnable", dry_run=False)
     run.assert_not_called()
     assert result.startswith("Rejected:")
@@ -1926,11 +1926,11 @@ def test_snmp_write_view_create_requires_write_flag(monkeypatch: pytest.MonkeyPa
     ],
 )
 def test_snmp_write_view_create_prechecks_before_send(listing: str, message: str) -> None:
-    from netmiko_mcp_linksys.server import snmp_write_view_create
+    from lgs_switch_mcp.server import snmp_write_view_create
 
     sent: list[list[str]] = []
     session = _fake_snmp_session({READBACK_SNMP_VIEW: listing}, sent)
-    with patch("netmiko_mcp_linksys.server.run_in_session", side_effect=session):
+    with patch("lgs_switch_mcp.server.run_in_session", side_effect=session):
         result = snmp_write_view_create("ifmib", "ifAdminStatus", dry_run=False)
     assert sent == []
     assert result.startswith("Rejected:")
@@ -1938,14 +1938,14 @@ def test_snmp_write_view_create_prechecks_before_send(listing: str, message: str
 
 
 def test_snmp_view_create_poe_allowed_on_read_view() -> None:
-    from netmiko_mcp_linksys.server import snmp_view_create
+    from lgs_switch_mcp.server import snmp_view_create
 
     sent: list[list[str]] = []
     session = _fake_snmp_session(
         {READBACK_SNMP_ACCESS: ACCESS_SHOW_RW, READBACK_SNMP_VIEW: VIEW_SHOW_WITH_POE},
         sent,
     )
-    with patch("netmiko_mcp_linksys.server.run_in_session", side_effect=session):
+    with patch("lgs_switch_mcp.server.run_in_session", side_effect=session):
         result = snmp_view_create("ifmib", "power-ethernet", dry_run=False)
     assert sent == [["snmp view ifmib 1.3.6.1.2.1.105 included"]]
     assert "Read-back check: view ifmib includes 1.3.6.1.2.1.105" in result
@@ -1978,11 +1978,11 @@ UNBOUND_ACCESS = ACCESS_SHOW_RW.replace("Write View: ifmib_w", "Write View: none
 def test_snmp_view_create_refuses_whole_mib_in_write_view(
     view: str, access: str, views: str, message: str
 ) -> None:
-    from netmiko_mcp_linksys.server import snmp_view_create
+    from lgs_switch_mcp.server import snmp_view_create
 
     sent: list[list[str]] = []
     session = _fake_snmp_session({READBACK_SNMP_ACCESS: access, READBACK_SNMP_VIEW: views}, sent)
-    with patch("netmiko_mcp_linksys.server.run_in_session", side_effect=session):
+    with patch("lgs_switch_mcp.server.run_in_session", side_effect=session):
         result = snmp_view_create(view, "power-ethernet", dry_run=False)
     assert sent == []
     assert result.startswith("Rejected:")
@@ -1992,11 +1992,11 @@ def test_snmp_view_create_refuses_whole_mib_in_write_view(
 def test_snmp_community_create_rw_split_and_redaction(
     community_env: str, audit_log
 ) -> None:
-    from netmiko_mcp_linksys.server import snmp_community_create
+    from lgs_switch_mcp.server import snmp_community_create
 
     sent: list[list[str]] = []
     session = _fake_snmp_session(_rw_listing(VIEW_SHOW_WITH_POE), sent)
-    with patch("netmiko_mcp_linksys.server.run_in_session", side_effect=session):
+    with patch("lgs_switch_mcp.server.run_in_session", side_effect=session):
         result = snmp_community_create("ifmib", "rw", "ifmib_w", dry_run=False)
     assert len(sent) == 1
     assert sent[0][1] == "snmp access ifmib_grp v2c read ifmib write ifmib_w notify none"
@@ -2008,12 +2008,12 @@ def test_snmp_community_create_rw_split_and_redaction(
 
 
 def test_snmp_community_create_rw_with_poe_write_view(community_env: str) -> None:
-    from netmiko_mcp_linksys.server import snmp_community_create
+    from lgs_switch_mcp.server import snmp_community_create
 
     listing = _rw_listing(_views(_read_view_ifmib(), WRITE_VIEW_OK))
     sent: list[list[str]] = []
     with patch(
-        "netmiko_mcp_linksys.server.run_in_session",
+        "lgs_switch_mcp.server.run_in_session",
         side_effect=_fake_snmp_session(listing, sent),
     ):
         result = snmp_community_create("ifmib", "rw", "ifmib_w", dry_run=False)
@@ -2034,9 +2034,9 @@ def test_snmp_community_create_rw_with_poe_write_view(community_env: str) -> Non
 def test_snmp_community_create_rejects_bad_view_args(
     community_env: str, args: tuple[str, ...], message: str
 ) -> None:
-    from netmiko_mcp_linksys.server import snmp_community_create
+    from lgs_switch_mcp.server import snmp_community_create
 
-    with patch("netmiko_mcp_linksys.server.run_in_session") as run:
+    with patch("lgs_switch_mcp.server.run_in_session") as run:
         result = snmp_community_create(*args, dry_run=False)
     run.assert_not_called()
     assert result.startswith("Rejected:")
@@ -2057,11 +2057,11 @@ def test_snmp_community_create_rejects_bad_view_args(
 def test_snmp_community_create_rw_prechecks_write_view(
     community_env: str, listing: str, message: str
 ) -> None:
-    from netmiko_mcp_linksys.server import snmp_community_create
+    from lgs_switch_mcp.server import snmp_community_create
 
     sent: list[list[str]] = []
     session = _fake_snmp_session(_rw_listing(listing), sent)
-    with patch("netmiko_mcp_linksys.server.run_in_session", side_effect=session):
+    with patch("lgs_switch_mcp.server.run_in_session", side_effect=session):
         result = snmp_community_create("ifmib", "rw", "ifmib_w", dry_run=False)
     assert sent == []
     assert result.startswith("Rejected:")
@@ -2073,14 +2073,14 @@ def test_snmp_community_create_rw_prechecks_write_view(
 def test_snmp_community_create_rw_access_mismatch_is_verification_failed(
     community_env: str,
 ) -> None:
-    from netmiko_mcp_linksys.server import snmp_community_create
+    from lgs_switch_mcp.server import snmp_community_create
 
     listing = _rw_listing(VIEW_SHOW_RESTRICTED)
     # The device bound the community with write none instead of ifmib_w.
     listing[READBACK_SNMP_ACCESS] = UNBOUND_ACCESS
     sent: list[list[str]] = []
     with patch(
-        "netmiko_mcp_linksys.server.run_in_session",
+        "lgs_switch_mcp.server.run_in_session",
         side_effect=_fake_snmp_session(listing, sent),
     ):
         result = snmp_community_create("ifmib", "rw", "ifmib_w", dry_run=False)
@@ -2130,14 +2130,14 @@ def test_view_checks_are_case_sensitive() -> None:
 
 def test_attack_path_write_view_case_variant_refused_before_send() -> None:
     """snmp_view_create("wv", dry_run=False) then snmp_write_view_create("WV", dry_run=False) must fail."""
-    from netmiko_mcp_linksys.server import snmp_write_view_create
+    from lgs_switch_mcp.server import snmp_write_view_create
 
     read_only_wv = _views(
         VIEW_SHOW_RESTRICTED, _view_block("wv", "1.3.6.1.2.1.2", "included")
     )
     sent: list[list[str]] = []
     session = _fake_snmp_session({READBACK_SNMP_VIEW: read_only_wv}, sent)
-    with patch("netmiko_mcp_linksys.server.run_in_session", side_effect=session):
+    with patch("lgs_switch_mcp.server.run_in_session", side_effect=session):
         result = snmp_write_view_create("WV", "ifAdminStatus", dry_run=False)
     assert sent == []
     assert result.startswith("Rejected:")
@@ -2146,12 +2146,12 @@ def test_attack_path_write_view_case_variant_refused_before_send() -> None:
 
 def test_attack_path_community_rw_case_variant_refused(community_env: str) -> None:
     """A community with write view "wv" must not pass via the "WV" write view."""
-    from netmiko_mcp_linksys.server import snmp_community_create
+    from lgs_switch_mcp.server import snmp_community_create
 
     listing = _rw_listing(_views(VIEW_SHOW_RESTRICTED, CASE_SPLIT_VIEWS))
     sent: list[list[str]] = []
     with patch(
-        "netmiko_mcp_linksys.server.run_in_session",
+        "lgs_switch_mcp.server.run_in_session",
         side_effect=_fake_snmp_session(listing, sent),
     ):
         result = snmp_community_create("ifmib", "rw", "wv", dry_run=False)
@@ -2166,14 +2166,14 @@ def test_attack_path_community_rw_case_variant_refused(community_env: str) -> No
     [("WV", "interfaces"), ("IFMIB", "interfaces"), ("IFMIB", "power-ethernet")],
 )
 def test_snmp_view_create_refuses_case_variant(view: str, subtree: str) -> None:
-    from netmiko_mcp_linksys.server import snmp_view_create
+    from lgs_switch_mcp.server import snmp_view_create
 
     views = _views(VIEW_SHOW_RESTRICTED, _view_block("wv", "1.3.6.1.2.1.2", "included"))
     sent: list[list[str]] = []
     session = _fake_snmp_session(
         {READBACK_SNMP_VIEW: views, READBACK_SNMP_ACCESS: ACCESS_SHOW_RW}, sent
     )
-    with patch("netmiko_mcp_linksys.server.run_in_session", side_effect=session):
+    with patch("lgs_switch_mcp.server.run_in_session", side_effect=session):
         result = snmp_view_create(view, subtree, dry_run=False)
     assert sent == []
     assert result.startswith("Rejected:")
@@ -2181,14 +2181,14 @@ def test_snmp_view_create_refuses_case_variant(view: str, subtree: str) -> None:
 
 
 def test_snmp_view_create_refuses_unparseable_viewtree() -> None:
-    from netmiko_mcp_linksys.server import snmp_view_create
+    from lgs_switch_mcp.server import snmp_view_create
 
     sent: list[list[str]] = []
     session = _fake_snmp_session(
         {READBACK_SNMP_ACCESS: ACCESS_SHOW_RW, READBACK_SNMP_VIEW: "garbage without keys"},
         sent,
     )
-    with patch("netmiko_mcp_linksys.server.run_in_session", side_effect=session):
+    with patch("lgs_switch_mcp.server.run_in_session", side_effect=session):
         result = snmp_view_create("ifmib", "interfaces", dry_run=False)
     assert sent == []
     assert result.startswith("Rejected:")
@@ -2285,7 +2285,7 @@ class FakeSwitch:
 
 
 def _run_on(switch: FakeSwitch, tool: str, *args: str) -> str:
-    from netmiko_mcp_linksys import server
+    from lgs_switch_mcp import server
 
     def exec_cmd(_conn: Any, command: str) -> str:
         if command == READBACK_SNMP_VIEW:
@@ -2406,7 +2406,7 @@ def test_readback_with_wildcard_mask_is_rolled_back() -> None:
 
 
 def test_readback_exception_after_include_is_rolled_back() -> None:
-    from netmiko_mcp_linksys import server
+    from lgs_switch_mcp import server
 
     switch = FakeSwitch()
     real_read = server._read_views
@@ -2499,7 +2499,7 @@ def test_present_column_in_unsafe_view_is_refused_without_send() -> None:
 
 
 def test_send_config_passes_error_pattern_to_netmiko() -> None:
-    from netmiko_mcp_linksys.connection import CONFIG_ERROR_PATTERN, _send_config
+    from lgs_switch_mcp.connection import CONFIG_ERROR_PATTERN, _send_config
 
     switch = FakeSwitch()
     _send_config(switch, ["snmp view a 1.3.6.1.2.1.2 included"])
@@ -2635,8 +2635,8 @@ def test_only_rollback_removes_view_entries() -> None:
     """No code except the write-view rollback builds a 'no snmp view' command."""
     import inspect
 
-    import netmiko_mcp_linksys.snmp_cli as cli
-    from netmiko_mcp_linksys import connection, server
+    import lgs_switch_mcp.snmp_cli as cli
+    from lgs_switch_mcp import connection, server
 
     source = "\n".join(inspect.getsource(m) for m in (server, cli, connection))
     # String literals only (docstrings use ``no snmp view``), any spacing,
@@ -2658,10 +2658,10 @@ def test_only_rollback_removes_view_entries() -> None:
 def test_tools_refuse_switching_off_protected_ports(
     port: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from netmiko_mcp_linksys.writetools import poe_disable, port_disable
+    from lgs_switch_mcp.writetools import poe_disable, port_disable
 
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/10,0/24")
-    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
+    with patch("lgs_switch_mcp.writes.run_in_session") as run:
         admin = port_disable(port, dry_run=False)
         poe = poe_disable(port, dry_run=False)
     run.assert_not_called()
@@ -2674,13 +2674,13 @@ def test_tools_refuse_switching_off_protected_ports(
 def test_tools_fail_closed_without_valid_protected_ports(
     value: str | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from netmiko_mcp_linksys.writetools import poe_disable, port_disable
+    from lgs_switch_mcp.writetools import poe_disable, port_disable
 
     if value is None:
         monkeypatch.delenv("SWITCH_PROTECTED_PORTS", raising=False)
     else:
         monkeypatch.setenv("SWITCH_PROTECTED_PORTS", value)
-    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
+    with patch("lgs_switch_mcp.writes.run_in_session") as run:
         admin = port_disable("0/3", dry_run=False)
         poe = poe_disable("0/3", dry_run=False)
     run.assert_not_called()
@@ -2690,11 +2690,11 @@ def test_tools_fail_closed_without_valid_protected_ports(
 def test_port_0_15_needs_caution_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
     """0.3.0: 0/15 (EoC converter with Zigbee router) is a caution port
     when SWITCH_CAUTION_PORTS lists it: writes need confirm_caution_port."""
-    from netmiko_mcp_linksys.writetools import poe_disable
+    from lgs_switch_mcp.writetools import poe_disable
 
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/10,0/24")
     monkeypatch.setenv("SWITCH_CAUTION_PORTS", "0/15")
-    with patch("netmiko_mcp_linksys.writes.run_in_session", return_value={"ok": 1}) as run:
+    with patch("lgs_switch_mcp.writes.run_in_session", return_value={"ok": 1}) as run:
         refused = poe_disable("0/15", dry_run=False)
         assert refused.startswith("Rejected:") and "caution port" in refused
         run.assert_not_called()
@@ -2707,7 +2707,7 @@ def test_run_show_sequence_redacts_like_run_show(
 ) -> None:
     """#5 on 0.2.0: run_show_sequence uses send_paged_redacted and keeps
     SNMP listings out of the session log, as run_show / run_shows do."""
-    from netmiko_mcp_linksys import connection
+    from lgs_switch_mcp import connection
 
     monkeypatch.setenv("SWITCH_SESSION_LOG", str(tmp_path / "session.log"))
     captured: list[dict[str, Any]] = []
@@ -2842,7 +2842,7 @@ def test_redact_show_output_masks_community_fields_in_other_shows(
 def test_is_snmp_sensitive_show_matches_abbreviations(
     command: str, sensitive: bool
 ) -> None:
-    from netmiko_mcp_linksys.connection import _is_snmp_sensitive_show
+    from lgs_switch_mcp.connection import _is_snmp_sensitive_show
 
     assert _is_snmp_sensitive_show(command) is sensitive
 
@@ -2850,7 +2850,7 @@ def test_is_snmp_sensitive_show_matches_abbreviations(
 def test_run_show_sequence_disables_session_log_for_abbreviations(
     community_env: str, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from netmiko_mcp_linksys import connection
+    from lgs_switch_mcp import connection
 
     monkeypatch.setenv("SWITCH_SESSION_LOG", str(tmp_path / "session.log"))
     captured: list[dict[str, Any]] = []
@@ -2898,7 +2898,7 @@ def test_run_show_sequence_disables_session_log_for_abbreviations(
 def test_send_paged_timeout_omits_last_line_for_sensitive_snmp_show(
     command: str, community_env: str
 ) -> None:
-    from netmiko_mcp_linksys.connection import send_paged
+    from lgs_switch_mcp.connection import send_paged
 
     chan = _IdleTimeoutChannel(
         [[f"{command}\r\n", f"Community Name: {_FOREIGN_COMMUNITY}"]]
@@ -2916,7 +2916,7 @@ def test_send_paged_timeout_omits_last_line_for_sensitive_snmp_show(
 def test_send_paged_timeout_keeps_redacted_last_line_for_other_shows(
     community_env: str,
 ) -> None:
-    from netmiko_mcp_linksys.connection import send_paged
+    from lgs_switch_mcp.connection import send_paged
 
     chan = _IdleTimeoutChannel(
         [["show interfaces\r\n", f"Description: {SECRET} uplink"]]

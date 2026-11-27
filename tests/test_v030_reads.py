@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from netmiko_mcp_linksys import configstore
-from netmiko_mcp_linksys import readtools as r
+from lgs_switch_mcp import configstore
+from lgs_switch_mcp import readtools as r
 from tests import samples_iss as s
 from tests.fakes import RUNNING_CONFIG, SECRETS_IN_RUNNING, FakeSwitch, install
 
@@ -111,7 +111,7 @@ def test_lldp_and_poe(switch: FakeSwitch) -> None:
 
 
 def test_read_tools_respect_allowlist(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    from netmiko_mcp_linksys.toolkit import prepare_runtime
+    from lgs_switch_mcp.toolkit import prepare_runtime
 
     narrow = tmp_path / "commands.yml"
     narrow.write_text("allowed_commands:\n  - show system information\ndenied_commands: []\n")
@@ -259,7 +259,7 @@ def test_unified_diff_is_capped() -> None:
 
 
 def test_audit_tail(audit_log, monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys.audit import write_audit
+    from lgs_switch_mcp.audit import write_audit
 
     for i in range(5):
         write_audit(tool=f"t{i}", params={}, allowed=True, result="ok")
@@ -314,7 +314,7 @@ class _HelpChannel:
 
 
 def test_send_help_never_submits_the_line(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys import connection
+    from lgs_switch_mcp import connection
 
     monkeypatch.setenv("SWITCH_READ_TIMEOUT", "1")
     chan = _HelpChannel()

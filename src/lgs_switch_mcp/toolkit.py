@@ -13,8 +13,8 @@ from netmiko_mcp.security import (
     validate_command,
 )
 
-from netmiko_mcp_linksys.audit import write_audit
-from netmiko_mcp_linksys.validation import redact_secrets
+from lgs_switch_mcp.audit import write_audit
+from lgs_switch_mcp.validation import redact_secrets
 
 
 def with_audit_warning(text: str, warning: str | None) -> str:

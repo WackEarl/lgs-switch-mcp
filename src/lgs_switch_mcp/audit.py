@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from netmiko_mcp_linksys.connection import prepare_private_file, warn
-from netmiko_mcp_linksys.validation import redact_secrets
+from lgs_switch_mcp.connection import prepare_private_file, warn
+from lgs_switch_mcp.validation import redact_secrets
 
 
 def _redact_obj(value: Any) -> Any:

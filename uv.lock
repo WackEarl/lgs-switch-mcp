@@ -372,6 +372,32 @@ wheels = [
 ]
 
 [[package]]
+name = "lgs-switch-mcp"
+version = "0.3.2"
+source = { editable = "." }
+dependencies = [
+    { name = "mcp" },
+    { name = "netmiko" },
+    { name = "netmiko-mcp" },
+    { name = "paramiko" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mcp", specifier = "==2.3.0" },
+    { name = "netmiko", specifier = "==4.8.0" },
+    { name = "netmiko-mcp", specifier = "==0.3.0" },
+    { name = "paramiko", specifier = "==4.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "markdown-it-py"
 version = "4.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -464,32 +490,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/92/90/993af58a09d109f83
 wheels = [
     { url = "https://files.pythonhosted.org/packages/eb/fd/2d35f72d9c811ca1334c49834386e0ab55a3446ad5022bfcf04b201cb9c5/netmiko_mcp-0.3.0-py3-none-any.whl", hash = "sha256:3ecd20913be42dcef1e8c7956cc1ac37f53c44c60e2983a8f138515d78555b03", size = 35741, upload-time = "2026-11-09T19:30:44.813Z" },
 ]
-
-[[package]]
-name = "netmiko-mcp-linksys"
-version = "0.3.1"
-source = { editable = "." }
-dependencies = [
-    { name = "mcp" },
-    { name = "netmiko" },
-    { name = "netmiko-mcp" },
-    { name = "paramiko" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "mcp", specifier = "==2.3.0" },
-    { name = "netmiko", specifier = "==4.8.0" },
-    { name = "netmiko-mcp", specifier = "==0.3.0" },
-    { name = "paramiko", specifier = "==4.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-]
-provides-extras = ["dev"]
 
 [[package]]
 name = "ntc-templates"

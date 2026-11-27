@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from netmiko_mcp_linksys.connection import (
+from lgs_switch_mcp.connection import (
     call_budget,
     call_deadline,
     config_generation,
@@ -32,9 +32,9 @@ from netmiko_mcp_linksys.connection import (
     send_paged_redacted,
     warn,
 )
-from netmiko_mcp_linksys.errors import SwitchConnectionError
-from netmiko_mcp_linksys.validation import ValidationError, redact_secrets
-from netmiko_mcp_linksys.writes import read_config
+from lgs_switch_mcp.errors import SwitchConnectionError
+from lgs_switch_mcp.validation import ValidationError, redact_secrets
+from lgs_switch_mcp.writes import read_config
 
 # Same command as readtools.SHOW_SYSTEM (readtools imports this module).
 SHOW_SYSTEM = "show system information"

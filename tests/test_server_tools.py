@@ -7,20 +7,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from netmiko_mcp_linksys.audit import write_audit
-from netmiko_mcp_linksys.server import (
+from lgs_switch_mcp.audit import write_audit
+from lgs_switch_mcp.server import (
     port_overview,
     port_set_description,
     save_config,
     show,
 )
-from netmiko_mcp_linksys.writetools import poe_disable, port_disable
+from lgs_switch_mcp.writetools import poe_disable, port_disable
 from tests.fakes import FakeSwitch, install
 
 
 def test_port_disable_rejects_protected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/24")
-    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
+    with patch("lgs_switch_mcp.writes.run_in_session") as run:
         result = port_disable("0/24", dry_run=False)
     run.assert_not_called()
     assert result.startswith("Rejected:")
@@ -29,7 +29,7 @@ def test_port_disable_rejects_protected(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_poe_disable_rejects_protected_and_non_poe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/8")
-    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
+    with patch("lgs_switch_mcp.writes.run_in_session") as run:
         protected = poe_disable("0/8", dry_run=False)
         uplink = poe_disable("0/28", dry_run=False)
     run.assert_not_called()
@@ -39,7 +39,7 @@ def test_poe_disable_rejects_protected_and_non_poe(monkeypatch: pytest.MonkeyPat
 
 def test_port_disable_sends_builder_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/24")
-    from netmiko_mcp_linksys.commands import READBACK_INTERFACE
+    from lgs_switch_mcp.commands import READBACK_INTERFACE
 
     readback = READBACK_INTERFACE.format(port="0/2")
     switch = install(monkeypatch, FakeSwitch({readback: ["Gi0/2 up", "Gi0/2 down"]}))
@@ -53,7 +53,7 @@ def test_port_disable_sends_builder_commands(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_description_rejects_special_chars() -> None:
-    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
+    with patch("lgs_switch_mcp.writes.run_in_session") as run:
         result = port_set_description("0/1", "bad|text", dry_run=False)
     run.assert_not_called()
     assert result.startswith("Rejected:")
@@ -112,7 +112,7 @@ RUN_B = "!\nsystem location B\nend\n"
 
 
 def test_save_config_dry_run_default_saves_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys import configstore
+    from lgs_switch_mcp import configstore
 
     configstore.store_backup(RUN_A, "running", tag="pre-save")
     switch = install(
@@ -125,7 +125,7 @@ def test_save_config_dry_run_default_saves_nothing(monkeypatch: pytest.MonkeyPat
         ),
     )
     saved: list[object] = []
-    monkeypatch.setattr("netmiko_mcp_linksys.server.save_in_session", saved.append)
+    monkeypatch.setattr("lgs_switch_mcp.server.save_in_session", saved.append)
     result = json.loads(save_config())
     assert saved == []
     assert result["sent"] is False
@@ -151,7 +151,7 @@ def test_save_config_dry_run_without_earlier_copy(monkeypatch: pytest.MonkeyPatc
 def test_save_config_backs_up_running_and_diffs_previous_save(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from netmiko_mcp_linksys import configstore
+    from lgs_switch_mcp import configstore
 
     monkeypatch.setenv("SWITCH_PRE_WRITE_SNAPSHOT", "required")
     configstore.store_backup(RUN_A, "running", tag="pre-save")
@@ -166,7 +166,7 @@ def test_save_config_backs_up_running_and_diffs_previous_save(
             }
         ),
     )
-    monkeypatch.setattr("netmiko_mcp_linksys.server.save_in_session", lambda _c: "Saved")
+    monkeypatch.setattr("lgs_switch_mcp.server.save_in_session", lambda _c: "Saved")
     result = json.loads(save_config(dry_run=False))
     backup = result["backup"]
     assert backup["path"].endswith("_running_pre-save.cfg") or re.search(
@@ -187,7 +187,7 @@ def test_save_config_refuses_without_backup_when_required(
     monkeypatch.setenv("SWITCH_PRE_WRITE_SNAPSHOT", "required")
     install(monkeypatch, FakeSwitch({}))
     saved: list[object] = []
-    monkeypatch.setattr("netmiko_mcp_linksys.server.save_in_session", saved.append)
+    monkeypatch.setattr("lgs_switch_mcp.server.save_in_session", saved.append)
     result = save_config(dry_run=False)
     assert result.startswith("Error: Backup of the running-config to be saved failed")
     assert saved == []
@@ -198,7 +198,7 @@ def test_save_config_best_effort_saves_without_backup(monkeypatch: pytest.Monkey
     install(monkeypatch, FakeSwitch({"show system information": "Config Save Status : Saved\n"}))
     saved: list[object] = []
     monkeypatch.setattr(
-        "netmiko_mcp_linksys.server.save_in_session", lambda c: saved.append(c) or "Saved"
+        "lgs_switch_mcp.server.save_in_session", lambda c: saved.append(c) or "Saved"
     )
     result = json.loads(save_config(dry_run=False))
     assert saved and "failed" in result["backup"]
@@ -224,7 +224,7 @@ def test_audit_log_written(audit_log, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_tools_registered() -> None:
-    from netmiko_mcp_linksys.server import mcp
+    from lgs_switch_mcp.server import mcp
 
     names = {tool.name for tool in mcp._tool_manager.list_tools()}
     assert names == {
@@ -271,7 +271,7 @@ def test_disable_fails_closed_when_protected_ports_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("SWITCH_PROTECTED_PORTS", raising=False)
-    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
+    with patch("lgs_switch_mcp.writes.run_in_session") as run:
         admin = port_disable("0/1", dry_run=False)
         poe = poe_disable("0/1", dry_run=False)
     run.assert_not_called()
@@ -281,7 +281,7 @@ def test_disable_fails_closed_when_protected_ports_unset(
 
 def test_enable_allowed_when_protected_ports_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SWITCH_PROTECTED_PORTS", raising=False)
-    from netmiko_mcp_linksys.writetools import poe_enable, port_enable
+    from lgs_switch_mcp.writetools import poe_enable, port_enable
 
     switch = install(monkeypatch, FakeSwitch({}))
     assert json.loads(port_enable("0/1", dry_run=False))["sent"] is True
@@ -293,7 +293,7 @@ def test_enable_allowed_when_protected_ports_unset(monkeypatch: pytest.MonkeyPat
 
 
 def test_port_overview_is_read_only(reset_command_file: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys.server import PORT_OVERVIEW_COMMANDS
+    from lgs_switch_mcp.server import PORT_OVERVIEW_COMMANDS
 
     seen: list[list[str]] = []
 
@@ -302,13 +302,13 @@ def test_port_overview_is_read_only(reset_command_file: None, monkeypatch: pytes
         return [(command, f"OUT:{command}", None) for command in commands]
 
     with (
-        patch("netmiko_mcp_linksys.server.run_show", create=True) as run_show,
+        patch("lgs_switch_mcp.server.run_show", create=True) as run_show,
         patch(
-            "netmiko_mcp_linksys.server.run_show_sequence", side_effect=fake_sequence
+            "lgs_switch_mcp.server.run_show_sequence", side_effect=fake_sequence
         ) as run_seq,
-        patch("netmiko_mcp_linksys.writes.run_in_session") as run_cfg,
-        patch("netmiko_mcp_linksys.server.save_in_session") as run_save,
-        patch("netmiko_mcp_linksys.server.run_config_set", create=True) as run_set,
+        patch("lgs_switch_mcp.writes.run_in_session") as run_cfg,
+        patch("lgs_switch_mcp.server.save_in_session") as run_save,
+        patch("lgs_switch_mcp.server.run_config_set", create=True) as run_set,
     ):
         result = port_overview()
     assert seen == [list(PORT_OVERVIEW_COMMANDS)]
@@ -327,14 +327,14 @@ def test_port_overview_opens_one_session(
     reset_command_file: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Regression for #5: one SSH session for all four show commands."""
-    from netmiko_mcp_linksys.server import PORT_OVERVIEW_COMMANDS
+    from lgs_switch_mcp.server import PORT_OVERVIEW_COMMANDS
 
     monkeypatch.setenv("SWITCH_PAGING_OFF", "0")
     conn = MagicMock()
     with (
-        patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=conn) as ch,
+        patch("lgs_switch_mcp.connection.ConnectHandler", return_value=conn) as ch,
         patch(
-            "netmiko_mcp_linksys.connection.send_paged",
+            "lgs_switch_mcp.connection.send_paged",
             side_effect=lambda _conn, command: f"OUT:{command}",
         ) as paged,
     ):
@@ -354,17 +354,17 @@ def test_port_overview_stops_after_failed_command(
 ) -> None:
     import os
 
-    from netmiko_mcp_linksys.connection import SEQUENCE_SKIPPED, SwitchConnectionError
-    from netmiko_mcp_linksys.server import PORT_OVERVIEW_COMMANDS
+    from lgs_switch_mcp.connection import SEQUENCE_SKIPPED, SwitchConnectionError
+    from lgs_switch_mcp.server import PORT_OVERVIEW_COMMANDS
 
     password = os.environ["SWITCH_PASSWORD"]
     monkeypatch.setenv("SWITCH_PAGING_OFF", "0")
     conn = MagicMock()
     first, second, third, fourth = PORT_OVERVIEW_COMMANDS
     with (
-        patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=conn) as ch,
+        patch("lgs_switch_mcp.connection.ConnectHandler", return_value=conn) as ch,
         patch(
-            "netmiko_mcp_linksys.connection.send_paged",
+            "lgs_switch_mcp.connection.send_paged",
             side_effect=[
                 "INFO",
                 SwitchConnectionError(f"No prompt after {second!r} ({password})"),
@@ -387,15 +387,15 @@ def test_port_overview_unexpected_error_is_redacted(
 ) -> None:
     import os
 
-    from netmiko_mcp_linksys.server import PORT_OVERVIEW_COMMANDS
+    from lgs_switch_mcp.server import PORT_OVERVIEW_COMMANDS
 
     password = os.environ["SWITCH_PASSWORD"]
     monkeypatch.setenv("SWITCH_PAGING_OFF", "0")
     conn = MagicMock()
     with (
-        patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=conn),
+        patch("lgs_switch_mcp.connection.ConnectHandler", return_value=conn),
         patch(
-            "netmiko_mcp_linksys.connection.send_paged",
+            "lgs_switch_mcp.connection.send_paged",
             side_effect=OSError(f"socket closed {password}"),
         ) as paged,
     ):
@@ -411,11 +411,11 @@ def test_port_overview_connect_failure_single_attempt(
 ) -> None:
     import os
 
-    from netmiko_mcp_linksys.server import PORT_OVERVIEW_COMMANDS
+    from lgs_switch_mcp.server import PORT_OVERVIEW_COMMANDS
 
     password = os.environ["SWITCH_PASSWORD"]
     with patch(
-        "netmiko_mcp_linksys.connection.ConnectHandler",
+        "lgs_switch_mcp.connection.ConnectHandler",
         side_effect=RuntimeError(f"auth failed for {password}"),
     ) as ch:
         result = port_overview()
@@ -428,7 +428,7 @@ def test_port_overview_connect_failure_single_attempt(
 
 def test_port_overview_requires_command_file(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NETMIKO_MCP_COMMAND_FILE", raising=False)
-    with patch("netmiko_mcp_linksys.server.run_show_sequence") as run:
+    with patch("lgs_switch_mcp.server.run_show_sequence") as run:
         result = port_overview()
     run.assert_not_called()
     assert "NETMIKO_MCP_COMMAND_FILE" in result

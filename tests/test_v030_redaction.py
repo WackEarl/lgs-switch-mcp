@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from netmiko_mcp_linksys.connection import redact_show_output
-from netmiko_mcp_linksys.redaction import (
+from lgs_switch_mcp.connection import redact_show_output
+from lgs_switch_mcp.redaction import (
     REDACTED,
     REDACTED_LINE,
     redact_device_text,
@@ -127,7 +127,7 @@ def test_abbreviated_radius_show_is_strict_too() -> None:
 
 
 def test_session_log_rewrite_applies_line_rules(tmp_path, monkeypatch) -> None:
-    from netmiko_mcp_linksys.connection import redact_session_log_file
+    from lgs_switch_mcp.connection import redact_session_log_file
 
     path = tmp_path / "session.log"
     path.write_text("LGS328PC# show running-config\n" + RUNNING_CONFIG, encoding="utf-8")

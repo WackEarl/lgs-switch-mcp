@@ -10,8 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from netmiko_mcp_linksys.audit import check_audit_path, write_audit
-from netmiko_mcp_linksys.connection import (
+from lgs_switch_mcp.audit import check_audit_path, write_audit
+from lgs_switch_mcp.connection import (
     PAGER_RE,
     SwitchConnectionError,
     clean_output,
@@ -21,7 +21,7 @@ from netmiko_mcp_linksys.connection import (
     run_show,
     send_paged,
 )
-from netmiko_mcp_linksys.validation import ValidationError
+from lgs_switch_mcp.validation import ValidationError
 
 
 class FakeChannel:
@@ -127,7 +127,7 @@ def test_run_show_end_to_end_with_pager(monkeypatch: pytest.MonkeyPatch) -> None
         [["show power inline\r\n", _lines(1, 5), "--More--"], [_lines(5, 9), "LGS328PC#"]]
     )
     chan.disconnect = MagicMock()  # type: ignore[attr-defined]
-    with patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=chan):
+    with patch("lgs_switch_mcp.connection.ConnectHandler", return_value=chan):
         out = run_show("show power inline")
     assert len(out.splitlines()) == 8
     chan.disconnect.assert_called_once()  # type: ignore[attr-defined]
@@ -185,7 +185,7 @@ def _readonly_audit(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*_args: object, **_kwargs: object) -> None:
         raise OSError(30, "Read-only file system")
 
-    monkeypatch.setattr("netmiko_mcp_linksys.audit.prepare_private_file", boom)
+    monkeypatch.setattr("lgs_switch_mcp.audit.prepare_private_file", boom)
 
 
 def test_audit_failure_is_non_fatal(
@@ -208,12 +208,12 @@ def _fake_save_session(monkeypatch: pytest.MonkeyPatch) -> None:
         }
     )
     install(monkeypatch, switch)
-    monkeypatch.setattr("netmiko_mcp_linksys.server.save_in_session", lambda _c: "saved")
+    monkeypatch.setattr("lgs_switch_mcp.server.save_in_session", lambda _c: "saved")
 
 
 def test_tool_result_carries_audit_warning(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys.server import save_config
-    from netmiko_mcp_linksys.writetools import port_disable
+    from lgs_switch_mcp.server import save_config
+    from lgs_switch_mcp.writetools import port_disable
 
     _readonly_audit(monkeypatch)
     _fake_save_session(monkeypatch)
@@ -227,7 +227,7 @@ def test_tool_result_carries_audit_warning(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_audit_ok_has_no_warning(audit_log: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys.server import save_config
+    from lgs_switch_mcp.server import save_config
 
     _fake_save_session(monkeypatch)
     result = save_config(dry_run=False)
@@ -246,7 +246,7 @@ def test_startup_check_writable(audit_log: Path) -> None:
 def test_startup_check_readonly_warns_not_aborts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from netmiko_mcp_linksys.server import startup_checks
+    from lgs_switch_mcp.server import startup_checks
 
     blocker = tmp_path / "file"
     blocker.write_text("x")
@@ -273,8 +273,8 @@ def test_whitelist_has_system_information_not_version(commands_file: Path) -> No
 def test_show_system_information_allowed_show_version_not(
     reset_command_file: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from netmiko_mcp_linksys.server import show
+    from lgs_switch_mcp.server import show
 
-    monkeypatch.setattr("netmiko_mcp_linksys.server.run_show", lambda cmd: f"OK:{cmd}")
+    monkeypatch.setattr("lgs_switch_mcp.server.run_show", lambda cmd: f"OK:{cmd}")
     assert show("show system information") == "OK:show system information"
     assert show("show version").startswith("Command rejected:")

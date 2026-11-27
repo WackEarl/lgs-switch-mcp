@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from netmiko_mcp_linksys.server import show
-from netmiko_mcp_linksys.validation import (
+from lgs_switch_mcp.server import show
+from lgs_switch_mcp.validation import (
     ValidationError,
     config_output_is_error,
     parse_protected_ports,
@@ -90,7 +90,7 @@ def test_validate_description_rejects_leading_or_trailing_spaces(text: str) -> N
     ],
 )
 def test_show_allow_list(command: str, reset_command_file: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("netmiko_mcp_linksys.server.run_show", lambda cmd: f"OK:{cmd}")
+    monkeypatch.setattr("lgs_switch_mcp.server.run_show", lambda cmd: f"OK:{cmd}")
     result = show(command)
     assert result.startswith("OK:")
 
@@ -158,7 +158,7 @@ def test_show_rejects_pipe_semicolon_newlines(
     from unittest.mock import MagicMock
 
     run = MagicMock(return_value="SHOULD_NOT_RUN")
-    monkeypatch.setattr("netmiko_mcp_linksys.server.run_show", run)
+    monkeypatch.setattr("lgs_switch_mcp.server.run_show", run)
     result = show(command)
     assert result.startswith("Command rejected:")
     run.assert_not_called()
