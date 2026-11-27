@@ -3,13 +3,14 @@
 
 The intended installation path is the packaged entrypoint:
 
-    uvx --from git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.1.2 netmiko-mcp-linksys
+    uvx --from git+https://github.com/WackEarl/netmiko-mcp-linksys lgs-switch-mcp
 
-This file is not a standalone implementation. The `netmiko-mcp-linksys`
+The previous command name `netmiko-mcp-linksys` still works as a deprecated
+alias. This file is not a standalone implementation. The `lgs-switch-mcp`
 package must be installed in the same environment. For the older
 `uv run --no-project --with ... python /config/netmiko/lgs_mcp.py` form, add:
 
-    --with git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.1.2
+    --with git+https://github.com/WackEarl/netmiko-mcp-linksys
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ for _src in _CANDIDATES:
         sys.path.insert(0, str(_src))
         break
 
-from netmiko_mcp_linksys.server import main
+from lgs_switch_mcp.server import main
 
 if __name__ == "__main__":
     main()

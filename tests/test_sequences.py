@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from netmiko_mcp_linksys.connection import (
+from lgs_switch_mcp.connection import (
     READBACK_INTERFACE,
     READBACK_POE,
     build_admin_state_commands,
@@ -15,7 +15,7 @@ from netmiko_mcp_linksys.connection import (
     run_save,
     run_show,
 )
-from netmiko_mcp_linksys.validation import ValidationError
+from lgs_switch_mcp.validation import ValidationError
 
 
 def test_admin_state_sequences() -> None:
@@ -79,8 +79,8 @@ def test_connect_params_missing_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_run_show_uses_pager_loop() -> None:
     conn = MagicMock()
     with (
-        patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=conn) as ch,
-        patch("netmiko_mcp_linksys.connection.send_paged", return_value="INFO") as paged,
+        patch("lgs_switch_mcp.connection.ConnectHandler", return_value=conn) as ch,
+        patch("lgs_switch_mcp.connection.send_paged", return_value="INFO") as paged,
     ):
         assert run_show("show system information") == "INFO"
     ch.assert_called_once()
@@ -95,8 +95,8 @@ def test_run_config_and_readback() -> None:
     commands = build_admin_state_commands("0/1", False)
     readback = READBACK_INTERFACE.format(port="0/1")
     with (
-        patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=conn),
-        patch("netmiko_mcp_linksys.connection.send_paged", return_value="STATE") as paged,
+        patch("lgs_switch_mcp.connection.ConnectHandler", return_value=conn),
+        patch("lgs_switch_mcp.connection.send_paged", return_value="STATE") as paged,
     ):
         result = run_config_and_readback(commands, readback)
     # call 0: best-effort paging-off, call 1: the interface sequence
@@ -116,8 +116,8 @@ def test_run_config_rejects_device_error(monkeypatch: pytest.MonkeyPatch) -> Non
     conn.RETURN = "\n"
     conn.remote_conn.closed = True  # the logout finds the channel closed
     conn.send_config_set.return_value = "% Invalid input detected"
-    with patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=conn):
-        from netmiko_mcp_linksys.connection import SwitchConnectionError
+    with patch("lgs_switch_mcp.connection.ConnectHandler", return_value=conn):
+        from lgs_switch_mcp.connection import SwitchConnectionError
 
         with pytest.raises(SwitchConnectionError, match="rejected"):
             run_config_and_readback(build_poe_commands("0/1", True), READBACK_POE.format(port="0/1"))
@@ -141,8 +141,8 @@ def test_run_config_accepts_echoed_error_or_invalid_description(
     commands = build_description_commands("0/7", description)
     readback = READBACK_INTERFACE.format(port="0/7")
     with (
-        patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=conn),
-        patch("netmiko_mcp_linksys.connection.send_paged", return_value="STATE"),
+        patch("lgs_switch_mcp.connection.ConnectHandler", return_value=conn),
+        patch("lgs_switch_mcp.connection.send_paged", return_value="STATE"),
     ):
         result = run_config_and_readback(commands, readback)
     assert "STATE" in result
@@ -154,8 +154,8 @@ def test_run_save_sends_only_save(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWITCH_PAGING_OFF", "0")
     conn = MagicMock()
     with (
-        patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=conn),
-        patch("netmiko_mcp_linksys.connection.send_paged", return_value="success") as paged,
+        patch("lgs_switch_mcp.connection.ConnectHandler", return_value=conn),
+        patch("lgs_switch_mcp.connection.send_paged", return_value="success") as paged,
     ):
         assert run_save() == "success"
     paged.assert_called_once()
@@ -167,10 +167,10 @@ def test_run_save_sends_only_save(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_password_redacted_from_connection_error() -> None:
-    from netmiko_mcp_linksys.connection import SwitchConnectionError
+    from lgs_switch_mcp.connection import SwitchConnectionError
 
     with patch(
-        "netmiko_mcp_linksys.connection.ConnectHandler",
+        "lgs_switch_mcp.connection.ConnectHandler",
         side_effect=RuntimeError("auth failed for dummy-password-not-real"),
     ), pytest.raises(SwitchConnectionError, match=r"\*\*\*") as excinfo:
         run_show("show system information")

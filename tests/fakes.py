@@ -60,7 +60,7 @@ class FakeSwitch:
 
 
 def install(monkeypatch: pytest.MonkeyPatch, switch: FakeSwitch) -> FakeSwitch:
-    from netmiko_mcp_linksys import (
+    from lgs_switch_mcp import (
         configdump,
         connection,
         readtools,
@@ -68,7 +68,7 @@ def install(monkeypatch: pytest.MonkeyPatch, switch: FakeSwitch) -> FakeSwitch:
         writes,
         writetools,
     )
-    from netmiko_mcp_linksys.connection import redact_show_output
+    from lgs_switch_mcp.connection import redact_show_output
 
     def fake_send_paged(_conn: Any, command: str, **_kwargs: Any) -> str:
         return switch.show(command)

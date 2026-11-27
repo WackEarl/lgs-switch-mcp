@@ -39,7 +39,7 @@ def _private_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWITCH_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.delenv("SWITCH_CAUTION_PORTS", raising=False)
     monkeypatch.delenv("SWITCH_SYSLOG_ALLOWED", raising=False)
-    from netmiko_mcp_linksys import configdump, connection
+    from lgs_switch_mcp import configdump, connection
 
     configdump.reset()
     connection.reset_session_state()
@@ -52,7 +52,7 @@ def commands_file() -> Path:
 
 @pytest.fixture
 def reset_command_file(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys.server import prepare_runtime
+    from lgs_switch_mcp.server import prepare_runtime
 
     monkeypatch.setenv("NETMIKO_MCP_COMMAND_FILE", str(COMMANDS))
     prepare_runtime()

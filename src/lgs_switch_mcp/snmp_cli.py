@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass
 from itertools import pairwise
 
-from netmiko_mcp_linksys.validation import (
+from lgs_switch_mcp.validation import (
     ValidationError,
     redact_secrets,
     valid_community_for_redaction,

@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from netmiko_mcp_linksys import readtools as r
-from netmiko_mcp_linksys import tables
-from netmiko_mcp_linksys.redaction import REDACTED_LINE, redact_device_text
+from lgs_switch_mcp import readtools as r
+from lgs_switch_mcp import tables
+from lgs_switch_mcp.redaction import REDACTED_LINE, redact_device_text
 from tests import samples_iss as s
 from tests import samples_lgs_031 as live
 from tests.fakes import FakeSwitch, install
@@ -191,8 +191,8 @@ def _records(path: Path) -> list[dict]:
 
 
 def test_audited_call_writes_start_and_result(audit_log: Path) -> None:
-    from netmiko_mcp_linksys.audit import audited_call
-    from netmiko_mcp_linksys.toolkit import ok
+    from lgs_switch_mcp.audit import audited_call
+    from lgs_switch_mcp.toolkit import ok
 
     def sample_tool(port: str = "0/1") -> str:
         return ok("sample_tool", {"port": port}, "done")
@@ -207,7 +207,7 @@ def test_audited_call_writes_start_and_result(audit_log: Path) -> None:
 
 
 def test_audited_call_records_unexpected_exception(audit_log: Path) -> None:
-    from netmiko_mcp_linksys.audit import audited_call
+    from lgs_switch_mcp.audit import audited_call
 
     def broken_tool() -> str:
         raise TimeoutError("read timed out")
@@ -220,7 +220,7 @@ def test_audited_call_records_unexpected_exception(audit_log: Path) -> None:
 
 
 def test_audited_call_without_tool_record(audit_log: Path) -> None:
-    from netmiko_mcp_linksys.audit import audited_call
+    from lgs_switch_mcp.audit import audited_call
 
     assert audited_call(lambda: "x")() == "x"
     start, result = _records(audit_log)
@@ -245,7 +245,7 @@ def test_audit_tail_reports_unfinished_calls(audit_log: Path) -> None:
 def test_registered_tools_are_audited(audit_log: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
 
-    from netmiko_mcp_linksys import server
+    from lgs_switch_mcp import server
 
     install(monkeypatch, FakeSwitch({"show clock": "12:00:00"}))
     monkeypatch.setattr(server, "run_show", lambda _command: "12:00:00")
@@ -280,7 +280,7 @@ def test_mac_table_count_note(monkeypatch: pytest.MonkeyPatch, reset_command_fil
 
 
 def test_port_policy_text_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys.validation import port_policy_text
+    from lgs_switch_mcp.validation import port_policy_text
 
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/24,0/10")
     monkeypatch.setenv("SWITCH_CAUTION_PORTS", "0/15")
@@ -295,7 +295,7 @@ def test_port_policy_text_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_port_tool_descriptions_show_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys import server, writetools
+    from lgs_switch_mcp import server, writetools
 
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/10,0/24")
     monkeypatch.setenv("SWITCH_CAUTION_PORTS", "0/15")
@@ -332,7 +332,7 @@ def test_health_summary_environment(
 def test_health_summary_without_environment_allowlist(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from netmiko_mcp_linksys.toolkit import prepare_runtime
+    from lgs_switch_mcp.toolkit import prepare_runtime
 
     commands = tmp_path / "commands.yml"
     commands.write_text(
@@ -363,7 +363,7 @@ def test_environment_unavailable_marker() -> None:
 def test_environment_documented_layouts() -> None:
     """Layouts from the CLI reference of the same CLI family (Panasonic MU
     series, sections 3.77 and 3.83); the LGS live values match the format."""
-    from netmiko_mcp_linksys.tables import parse_environment
+    from lgs_switch_mcp.tables import parse_environment
 
     fan = parse_environment("\nSystem Fan Status: OK\n")
     assert fan["fields"]["System Fan Status"] == "OK"

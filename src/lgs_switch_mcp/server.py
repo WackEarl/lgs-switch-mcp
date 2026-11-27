@@ -19,9 +19,9 @@ from typing import Any
 from mcp.server import MCPServer
 from netmiko_mcp.security import validate_command
 
-from netmiko_mcp_linksys import configstore, connection, readtools, writes, writetools
-from netmiko_mcp_linksys.audit import audited_call, check_audit_path
-from netmiko_mcp_linksys.connection import (
+from lgs_switch_mcp import configstore, connection, readtools, writes, writetools
+from lgs_switch_mcp.audit import audited_call, check_audit_path
+from lgs_switch_mcp.connection import (
     CONFIG_ERROR_PATTERN,
     READBACK_DESCRIPTION,
     SwitchConnectionError,
@@ -39,7 +39,7 @@ from netmiko_mcp_linksys.connection import (
     send_paged_redacted,
     session_log_path,
 )
-from netmiko_mcp_linksys.snmp_cli import (
+from lgs_switch_mcp.snmp_cli import (
     CLI_SOURCE,
     POE_SUBTREE,
     READBACK_SNMP_ACCESS,
@@ -74,14 +74,14 @@ from netmiko_mcp_linksys.snmp_cli import (
     view_is_restricted,
     view_is_write_safe,
 )
-from netmiko_mcp_linksys.tables import parse_system_information
-from netmiko_mcp_linksys.toolkit import (
+from lgs_switch_mcp.tables import parse_system_information
+from lgs_switch_mcp.toolkit import (
     fail,
     ok,
     prepare_runtime,
     with_audit_warning,
 )
-from netmiko_mcp_linksys.validation import (
+from lgs_switch_mcp.validation import (
     ValidationError,
     canonical_port,
     port_policy_text,
@@ -98,15 +98,15 @@ from netmiko_mcp_linksys.validation import (
     validate_snmp_name,
     validate_user_remove_name,
 )
-from netmiko_mcp_linksys.writes import read_config
+from lgs_switch_mcp.writes import read_config
 
 try:
-    _PKG_VERSION = version("netmiko-mcp-linksys")
+    _PKG_VERSION = version("lgs-switch-mcp")
 except PackageNotFoundError:  # pragma: no cover
-    from netmiko_mcp_linksys import __version__ as _PKG_VERSION
+    from lgs_switch_mcp import __version__ as _PKG_VERSION
 
 mcp = MCPServer(
-    name="netmiko-mcp-linksys",
+    name="lgs-switch-mcp",
     instructions=(
         "MCP server for a single Linksys LGS-series switch, based on "
         "netmiko and netmiko-mcp. Use show for allow-listed read commands "
@@ -153,7 +153,7 @@ def startup_checks() -> list[str]:
         read_timeout()
     except ValidationError as exc:
         warnings.append(str(exc))
-        print(f"netmiko-mcp-linksys: warning: {exc}", file=sys.stderr, flush=True)
+        print(f"lgs-switch-mcp: warning: {exc}", file=sys.stderr, flush=True)
     session_log_path()
     if "SWITCH_SNMP_COMMUNITY" in os.environ:
         try:
@@ -162,7 +162,7 @@ def startup_checks() -> list[str]:
             # Invalid values are not used for redaction; never echo them.
             warnings.append(str(exc))
             print(
-                f"netmiko-mcp-linksys: warning: {exc}",
+                f"lgs-switch-mcp: warning: {exc}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -173,7 +173,7 @@ def startup_checks() -> list[str]:
             "is not 1) until the CLI syntax is live-confirmed."
         )
         warnings.append(message)
-        print(f"netmiko-mcp-linksys: warning: {message}", file=sys.stderr, flush=True)
+        print(f"lgs-switch-mcp: warning: {message}", file=sys.stderr, flush=True)
     return warnings
 
 

@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
-from netmiko_mcp_linksys import commands as c
-from netmiko_mcp_linksys import writetools as w
+from lgs_switch_mcp import commands as c
+from lgs_switch_mcp import writetools as w
 from tests.fakes import RUNNING_CONFIG, SECRETS_IN_RUNNING, FakeSwitch, install
 
 # ------------------------------------------------------------------ builders
@@ -361,7 +361,7 @@ def test_cable_diag_runs_only_when_not_dry(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_clear_counters_exec_and_resets_delta_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys import configstore
+    from lgs_switch_mcp import configstore
 
     configstore.write_state(w.COUNTERS_STATE, {"time": "t", "counters": {}})
     switch = install(monkeypatch, FakeSwitch({"clear counters": "", "show interfaces counters": "x"}))
@@ -392,7 +392,7 @@ def test_identity_name_refreshes_prompt(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_snmp_tools_default_to_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys import server
+    from lgs_switch_mcp import server
     from tests.test_snmp import (
         ACCESS_SHOW_RW,
         READBACK_SNMP_ACCESS,
@@ -414,7 +414,7 @@ def test_snmp_tools_default_to_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_snmp_community_dry_run_hides_secret(audit_log, monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys import server
+    from lgs_switch_mcp import server
     from tests.test_snmp import (
         ACCESS_SHOW_RW,
         READBACK_SNMP_ACCESS,
@@ -441,7 +441,7 @@ def test_snmp_community_dry_run_hides_secret(audit_log, monkeypatch: pytest.Monk
 def test_snmp_real_run_takes_snapshot_before_first_send(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from netmiko_mcp_linksys import server
+    from lgs_switch_mcp import server
     from tests.test_snmp import (
         ACCESS_SHOW_RW,
         READBACK_SNMP_ACCESS,
@@ -469,7 +469,7 @@ def test_snmp_real_run_takes_snapshot_before_first_send(
 def test_poe_cycle_never_enables_when_off_was_not_attempted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from netmiko_mcp_linksys.connection import SwitchConnectionError
+    from lgs_switch_mcp.connection import SwitchConnectionError
 
     switch = install(monkeypatch, FakeSwitch({}))
 

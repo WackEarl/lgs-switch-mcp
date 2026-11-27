@@ -13,9 +13,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from netmiko_mcp_linksys import configdump, connection, server, tables
-from netmiko_mcp_linksys import readtools as r
-from netmiko_mcp_linksys.connection import (
+from lgs_switch_mcp import configdump, connection, server, tables
+from lgs_switch_mcp import readtools as r
+from lgs_switch_mcp.connection import (
     SwitchConnectionError,
     call_budget,
     call_deadline,
@@ -25,7 +25,7 @@ from netmiko_mcp_linksys.connection import (
     send_paged,
     session,
 )
-from netmiko_mcp_linksys.validation import (
+from lgs_switch_mcp.validation import (
     ValidationError,
     canonical_port,
     reject_protected_port,
@@ -132,7 +132,7 @@ def test_health_summary_says_why_fan_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The 0.3.1 deployment: allowlist with only the incomplete 'show system fan'."""
-    from netmiko_mcp_linksys.toolkit import prepare_runtime
+    from lgs_switch_mcp.toolkit import prepare_runtime
 
     commands = tmp_path / "commands.yml"
     commands.write_text(
@@ -359,7 +359,7 @@ def test_failed_session_is_discarded_and_lock_released() -> None:
     chan.paramiko_cleanup.side_effect = lambda: order.append("transport")
     chan.disconnect.side_effect = lambda: order.append("disconnect")
     with (
-        patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=chan),
+        patch("lgs_switch_mcp.connection.ConnectHandler", return_value=chan),
         call_deadline(0.3),
         pytest.raises(SwitchConnectionError, match="call budget"),
     ):
@@ -374,7 +374,7 @@ def test_caught_timeout_still_discards_the_session() -> None:
     a prompt)."""
     chan = SilentChannel()
     with (
-        patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=chan),
+        patch("lgs_switch_mcp.connection.ConnectHandler", return_value=chan),
         call_deadline(0.3),
     ):
         results = connection.run_show_sequence(["show users", "show clock"])
@@ -394,7 +394,7 @@ def test_clean_session_logs_out_without_abort() -> None:
         original(data)
 
     chan.write_channel = record  # type: ignore[method-assign]
-    with patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=chan):
+    with patch("lgs_switch_mcp.connection.ConnectHandler", return_value=chan):
         assert run_show("show clock") == "12:00:00"
     assert "\x03" not in writes
     assert writes[-1] == "exit\n"
@@ -429,7 +429,7 @@ def test_hang_does_not_block_the_next_call() -> None:
         except SwitchConnectionError as exc:
             results["first"] = str(exc)
 
-    with patch("netmiko_mcp_linksys.connection.ConnectHandler", side_effect=lambda **_: next(channels)):
+    with patch("lgs_switch_mcp.connection.ConnectHandler", side_effect=lambda **_: next(channels)):
         worker = threading.Thread(target=first)
         worker.start()
         time.sleep(0.2)

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Renamed the distribution, Python package, console script, and MCP server
+  from `netmiko-mcp-linksys` / `netmiko_mcp_linksys` to `lgs-switch-mcp` /
+  `lgs_switch_mcp`. The previous console script and import path remain as
+  deprecated aliases so existing hub entries keep working. `SWITCH_*`
+  environment variables are unchanged. The GitHub repository name is
+  unchanged in this release.
+
 ## [0.3.2] - 2026-11-27
 
 ### Added

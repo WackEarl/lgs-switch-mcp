@@ -1,9 +1,11 @@
-# netmiko-mcp-linksys
+# lgs-switch-mcp
 
 [![CI](https://github.com/WackEarl/netmiko-mcp-linksys/actions/workflows/ci.yml/badge.svg)](https://github.com/WackEarl/netmiko-mcp-linksys/actions/workflows/ci.yml)
 
 stdio MCP server for a single Linksys LGS-series switch (developed against the
-LGS328PC CLI).
+LGS328PC CLI). Previously published as `netmiko-mcp-linksys`. The GitHub
+repository is still [WackEarl/netmiko-mcp-linksys](https://github.com/WackEarl/netmiko-mcp-linksys)
+until a follow-up rename.
 
 This project is a separate wrapper, based on [netmiko](https://github.com/ktbyers/netmiko)
 and [netmiko-mcp](https://github.com/ktbyers/netmiko_mcp) by Kirk Byers. The `show`
@@ -36,16 +38,20 @@ second login prompt). See [Live-test status](#live-test-status).
 
 ## Install and run
 
-The intended way to run this server is the packaged entrypoint, pinned to a
-tag:
+The intended way to run this server is the packaged entrypoint
+`lgs-switch-mcp`. The current release tag still uses the previous name:
 
 ```bash
 uvx --from git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.2 netmiko-mcp-linksys
 ```
 
-From a local checkout:
+From a local checkout of this branch (and from the next release), use the
+new command. The previous command still works and prints a deprecation
+warning:
 
 ```bash
+uvx --from /path/to/netmiko-mcp-linksys lgs-switch-mcp
+# alias, deprecated:
 uvx --from /path/to/netmiko-mcp-linksys netmiko-mcp-linksys
 ```
 
@@ -57,10 +63,12 @@ SHA-1; paramiko 5.x rejects that host-key algorithm.
 
 A compatibility shim, `lgs_mcp.py`, exists only for the older hub invocation
 `python /config/netmiko/lgs_mcp.py`. That file is not a standalone
-implementation: it imports `netmiko_mcp_linksys`. Prefer the `uvx --from ...
-netmiko-mcp-linksys` entry above. If you must keep the old command, add
-`--with git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.2` so the
-package is installed in that environment.
+implementation: it imports `lgs_switch_mcp` (the previous
+`netmiko_mcp_linksys` import still works as a deprecated alias). Prefer the
+`uvx --from ... lgs-switch-mcp` entry above. If you must keep the old
+command, add `--with git+https://github.com/WackEarl/netmiko-mcp-linksys`
+(or `@v0.3.2` for the last release under the previous name) so the package
+is installed in that environment.
 
 ## Environment variables
 
@@ -104,6 +112,12 @@ one unlock block per server. Keep `SWITCH_SNMP_WRITE_ENABLED` unset (the tools r
 until the community-create syntax has been confirmed live; only then set it to `1` in the
 hub env (shown below as the value to use after that confirmation). Fill `SWITCH_PROTECTED_PORTS` after the first read test —
 until it is set to a valid list, disable and PoE-off are refused.
+
+The snippet below is the current production pin (`@v0.3.2` and the previous
+command name). After the next release, change the last argument to
+`lgs-switch-mcp` (the old command remains a deprecated alias). The GitHub
+repository path stays `WackEarl/netmiko-mcp-linksys` until that repo is
+renamed.
 
 ```json
 {
@@ -373,7 +387,7 @@ in the 0.2.0 live check. **Community create/remove syntax and the SNMP
 read/write path through an external client are not live-confirmed.**
 `SWITCH_SNMP_WRITE_ENABLED` should stay unset (or anything other than
 `1`) until then; the tools fail closed. The
-command templates live in `src/netmiko_mcp_linksys/snmp_cli.py` and
+command templates live in `src/lgs_switch_mcp/snmp_cli.py` and
 cite their source. The primary source is the official Linksys LGSXXX
 CLI User Manual, chapter 19
 ([MAN_LGSXXX_LNKPG-00878_Rev_A00.pdf](https://downloads.linksys.com/support/assets/others/MAN_LGSXXX_LNKPG-00878_Rev_A00.pdf)):

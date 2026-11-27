@@ -8,17 +8,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 from netmiko.exceptions import NetmikoTimeoutException
 
-from netmiko_mcp_linksys.commands import build_admin_state_commands
-from netmiko_mcp_linksys.connection import (
+from lgs_switch_mcp.commands import build_admin_state_commands
+from lgs_switch_mcp.connection import (
     ConnectionError,
     SwitchConnectionError,
     clean_output,
     run_show,
 )
-from netmiko_mcp_linksys.errors import SwitchConnectionError as CanonicalError
-from netmiko_mcp_linksys.parser import PAGE_BREAK
-from netmiko_mcp_linksys.parser import clean_output as parse_clean_output
-from netmiko_mcp_linksys.validation import ValidationError
+from lgs_switch_mcp.errors import SwitchConnectionError as CanonicalError
+from lgs_switch_mcp.parser import PAGE_BREAK
+from lgs_switch_mcp.parser import clean_output as parse_clean_output
+from lgs_switch_mcp.validation import ValidationError
 
 
 def test_switch_connection_error_does_not_shadow_builtin() -> None:
@@ -45,7 +45,7 @@ def test_public_names_still_importable_from_connection() -> None:
 )
 def test_run_show_wraps_transport_errors(exc: BaseException) -> None:
     with patch(
-        "netmiko_mcp_linksys.connection.ConnectHandler",
+        "lgs_switch_mcp.connection.ConnectHandler",
         side_effect=exc,
     ), pytest.raises(SwitchConnectionError) as excinfo:
         run_show("show system information")
@@ -63,9 +63,9 @@ def test_session_reraises_switch_connection_error() -> None:
     conn = MagicMock()
     err = SwitchConnectionError("already redacted")
     with (
-        patch("netmiko_mcp_linksys.connection.ConnectHandler", return_value=conn),
+        patch("lgs_switch_mcp.connection.ConnectHandler", return_value=conn),
         patch(
-            "netmiko_mcp_linksys.connection.send_paged_redacted",
+            "lgs_switch_mcp.connection.send_paged_redacted",
             side_effect=err,
         ),
         pytest.raises(SwitchConnectionError, match="already redacted") as excinfo,
@@ -76,10 +76,10 @@ def test_session_reraises_switch_connection_error() -> None:
 
 
 def test_tools_still_refuse_protected_ports(monkeypatch: pytest.MonkeyPatch) -> None:
-    from netmiko_mcp_linksys.writetools import poe_disable, port_disable
+    from lgs_switch_mcp.writetools import poe_disable, port_disable
 
     monkeypatch.setenv("SWITCH_PROTECTED_PORTS", "0/10,0/24")
-    with patch("netmiko_mcp_linksys.writes.run_in_session") as run:
+    with patch("lgs_switch_mcp.writes.run_in_session") as run:
         for port in ("0/10", "0/24"):
             admin = port_disable(port, dry_run=False)
             poe = poe_disable(port, dry_run=False)

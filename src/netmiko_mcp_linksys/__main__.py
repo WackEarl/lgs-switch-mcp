@@ -1,6 +1,6 @@
-"""python -m netmiko_mcp_linksys"""
+"""python -m netmiko_mcp_linksys (deprecated alias)."""
 
-from netmiko_mcp_linksys.server import main
+from lgs_switch_mcp.compat import deprecated_main
 
 if __name__ == "__main__":
-    main()
+    deprecated_main()

@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from netmiko_mcp_linksys.validation import ValidationError
+from lgs_switch_mcp.validation import ValidationError
 
 DEFAULT_BACKUP_DIR = "/data/netmiko/backups"
 DEFAULT_STATE_DIR = "/data/netmiko/state"

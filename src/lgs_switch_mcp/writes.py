@@ -23,9 +23,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from netmiko_mcp_linksys import configstore
-from netmiko_mcp_linksys.commands import CONFIG_SHOW, STARTUP_UNAVAILABLE
-from netmiko_mcp_linksys.connection import (
+from lgs_switch_mcp import configstore
+from lgs_switch_mcp.commands import CONFIG_SHOW, STARTUP_UNAVAILABLE
+from lgs_switch_mcp.connection import (
     CONFIG_ERROR_PATTERN,
     SwitchConnectionError,
     _send_config,
@@ -33,10 +33,10 @@ from netmiko_mcp_linksys.connection import (
     send_paged,
     send_paged_redacted,
 )
-from netmiko_mcp_linksys.errors import wrap_transport_error
-from netmiko_mcp_linksys.redaction import redact_device_text
-from netmiko_mcp_linksys.tables import interface_config_block
-from netmiko_mcp_linksys.validation import (
+from lgs_switch_mcp.errors import wrap_transport_error
+from lgs_switch_mcp.redaction import redact_device_text
+from lgs_switch_mcp.tables import interface_config_block
+from lgs_switch_mcp.validation import (
     ValidationError,
     config_output_is_error,
     redact_secrets,

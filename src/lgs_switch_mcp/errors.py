@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from netmiko_mcp_linksys.validation import redact_secrets
+from lgs_switch_mcp.validation import redact_secrets
 
 
 class SwitchConnectionError(RuntimeError):

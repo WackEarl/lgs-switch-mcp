@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from netmiko_mcp_linksys.output import strip_controls as _strip_controls
+from lgs_switch_mcp.output import strip_controls as _strip_controls
 
 # Pager prompts seen on ISS / Cisco-SMB style CLIs, e.g. "--More--",
 # "-- More --", "--More-- (45%)", "More: <space>,  Quit: q ...",
