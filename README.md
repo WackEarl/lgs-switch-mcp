@@ -1,5 +1,7 @@
 # netmiko-mcp-linksys
 
+[![CI](https://github.com/WackEarl/netmiko-mcp-linksys/actions/workflows/ci.yml/badge.svg)](https://github.com/WackEarl/netmiko-mcp-linksys/actions/workflows/ci.yml)
+
 stdio MCP server for a single Linksys LGS-series switch (developed against the
 LGS328PC CLI).
 
