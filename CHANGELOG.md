@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `save_config` no longer reads `show current running-config` inside the
+  same SSH session as `save`. That dump is known to outlive the caller
+  request timeout, and `save_config(dry_run=false)` is exempt from
+  `SWITCH_CALL_BUDGET` so a write is not cut mid-`save`. A client abort
+  then left the worker thread and the SSH session running (no logout).
+  The pre-save copy now uses the same background dump as `config_read`:
+  a slow dump answers `Pending:` and does not send `save`; the next call
+  picks up the dump and saves. With `SWITCH_PRE_WRITE_SNAPSHOT=off` the
+  dump is skipped. After `save`, a prompt stuck to `[OK]` on the same
+  line is recognised as the end of the command.
+
 ## [0.4.0] - 2026-11-27
 
 ### Changed

@@ -25,11 +25,41 @@ PAGE_BREAK = "\ue000"
 MAX_PAGES = 2000
 
 
-def prompt_regex(conn: Any) -> re.Pattern[str]:
+def _prompt_body(conn: Any) -> str:
+    """Regex body for the device prompt, without anchors."""
     base = getattr(conn, "base_prompt", None)
     if isinstance(base, str) and base.strip():
-        return re.compile(r"^\s*" + re.escape(base.strip()) + r"[^\r\n#>]*[#>]\s*$")
-    return re.compile(r"^\s*[\w.\-]+[^\r\n#>]*[#>]\s*$")
+        return re.escape(base.strip()) + r"[^\r\n#>]*[#>]"
+    return r"[\w.\-]+[^\r\n#>]*[#>]"
+
+
+def prompt_regex(conn: Any) -> re.Pattern[str]:
+    """Whole last line is the device prompt (no other text)."""
+    return re.compile(r"^\s*" + _prompt_body(conn) + r"\s*$")
+
+
+def prompt_end_regex(conn: Any, *, allow_prefix: bool = False) -> re.Pattern[str]:
+    """Prompt at the end of the last visible line.
+
+    ``allow_prefix=True`` also matches a prompt stuck to earlier output on
+    the same line (e.g. ``[OK]hostname#`` after ``save``). The character
+    before the prompt, if any, must not be part of an identifier, so a
+    config token is not mistaken for the prompt.
+    """
+    body = _prompt_body(conn)
+    if allow_prefix:
+        return re.compile(
+            r"^(?P<prefix>.*?)(?:^|(?<=[^A-Za-z0-9._-]))" + body + r"\s*$"
+        )
+    return re.compile(r"^(?P<prefix>\s*)" + body + r"\s*$")
+
+
+def prompt_prefix(line: str, prompt_end: re.Pattern[str]) -> str | None:
+    """Prefix before a trailing prompt, or None if the line is not a prompt."""
+    match = prompt_end.search(line)
+    if match is None:
+        return None
+    return match.group("prefix")
 
 
 def visible_tail(raw: str) -> str:
@@ -42,7 +72,13 @@ def visible_tail(raw: str) -> str:
     return line
 
 
-def clean_output(raw: str, command: str, prompt_re: re.Pattern[str]) -> str:
+def clean_output(
+    raw: str,
+    command: str,
+    prompt_re: re.Pattern[str],
+    *,
+    prompt_end: re.Pattern[str] | None = None,
+) -> str:
     """Strip ANSI, control characters, pager prompts and their erase leftovers,
     the command echo, and the prompt.
 
@@ -76,8 +112,17 @@ def clean_output(raw: str, command: str, prompt_re: re.Pattern[str]) -> str:
         lines.pop(0)
     while lines and not lines[-1].strip():
         lines.pop()
-    if lines and prompt_re.search(lines[-1]):
-        lines.pop()
+    if lines:
+        prefix: str | None = None
+        if prompt_end is not None:
+            prefix = prompt_prefix(lines[-1], prompt_end)
+        elif prompt_re.search(lines[-1]):
+            prefix = ""
+        if prefix is not None:
+            if prefix.strip():
+                lines[-1] = prefix.rstrip()
+            else:
+                lines.pop()
     while lines and not lines[-1].strip():
         lines.pop()
     return "\n".join(lines)

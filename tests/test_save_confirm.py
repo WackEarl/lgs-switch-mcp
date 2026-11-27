@@ -181,13 +181,9 @@ def test_save_config_tool_reports_unknown_state(monkeypatch: pytest.MonkeyPatch)
     chan = ScriptedChannel([["save\r\n", "Are you sure? "]])
     monkeypatch.setenv("SWITCH_PAGING_OFF", "0")
     monkeypatch.setenv("SWITCH_READ_TIMEOUT", "1")
-    def no_config(_conn, source):
-        raise SwitchConnectionError(f"show {source}-config is not available")
-
-    with (
-        patch("lgs_switch_mcp.connection.ConnectHandler", return_value=chan),
-        patch("lgs_switch_mcp.server.read_config", side_effect=no_config),
-    ):
+    # SWITCH_PRE_WRITE_SNAPSHOT defaults to off in tests, so the running-config
+    # dump is skipped and only 'save' is sent.
+    with patch("lgs_switch_mcp.connection.ConnectHandler", return_value=chan):
         result = save_config(dry_run=False)
     assert result.startswith("Error: save did not complete")
     assert "unknown" in result
