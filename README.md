@@ -1,11 +1,11 @@
 # lgs-switch-mcp
 
-[![CI](https://github.com/WackEarl/netmiko-mcp-linksys/actions/workflows/ci.yml/badge.svg)](https://github.com/WackEarl/netmiko-mcp-linksys/actions/workflows/ci.yml)
+[![CI](https://github.com/WackEarl/lgs-switch-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/WackEarl/lgs-switch-mcp/actions/workflows/ci.yml)
 
 stdio MCP server for a single Linksys LGS-series switch (developed against the
 LGS328PC CLI). Previously published as `netmiko-mcp-linksys`. The GitHub
-repository is still [WackEarl/netmiko-mcp-linksys](https://github.com/WackEarl/netmiko-mcp-linksys)
-until a follow-up rename.
+repository is [WackEarl/lgs-switch-mcp](https://github.com/WackEarl/lgs-switch-mcp)
+(the previous path redirects).
 
 This project is a separate wrapper, based on [netmiko](https://github.com/ktbyers/netmiko)
 and [netmiko-mcp](https://github.com/ktbyers/netmiko_mcp) by Kirk Byers. The `show`
@@ -14,8 +14,9 @@ and the same allow/deny list format (`commands.yml`). Configuration tools send
 only fixed command sequences built by this wrapper; the model never supplies
 free-form config. See [Credits](#credits).
 
-**This is 0.3.2**, the fixes from the read-only retest of 0.3.1 and a
-rebuilt SSH session handling (see [What is new in 0.3.2](#what-is-new-in-032)).
+**This is 0.4.0**, the rename to `lgs-switch-mcp` (package and GitHub
+repository), GitHub Actions CI, and upstream credits. The 0.3.2 session
+handling is included (see [What is new in 0.3.2](#what-is-new-in-032)).
 0.3.1 fixed the first live check of 0.3.0 (see
 [What is new in 0.3.1](#what-is-new-in-031)). 0.3.0 added parsed JSON read tools (`health_summary`,
 `port_status`, `port_counters`, `counters_delta`, `mac_table`,
@@ -38,22 +39,21 @@ second login prompt). See [Live-test status](#live-test-status).
 
 ## Install and run
 
-The intended way to run this server is the packaged entrypoint
-`lgs-switch-mcp`. The current release tag still uses the previous name:
+The intended way to run this server is the packaged entrypoint, pinned to a
+tag:
 
 ```bash
-uvx --from git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.2 netmiko-mcp-linksys
+uvx --from git+https://github.com/WackEarl/lgs-switch-mcp@v0.4.0 lgs-switch-mcp
 ```
 
-From a local checkout of this branch (and from the next release), use the
-new command. The previous command still works and prints a deprecation
-warning:
+From a local checkout:
 
 ```bash
-uvx --from /path/to/netmiko-mcp-linksys lgs-switch-mcp
-# alias, deprecated:
-uvx --from /path/to/netmiko-mcp-linksys netmiko-mcp-linksys
+uvx --from /path/to/lgs-switch-mcp lgs-switch-mcp
 ```
+
+The previous command name `netmiko-mcp-linksys` still works and prints a
+deprecation warning.
 
 The process speaks MCP over stdio. It does **not** open an SSH session at
 startup; a connection is made only when a tool is called.
@@ -66,9 +66,8 @@ A compatibility shim, `lgs_mcp.py`, exists only for the older hub invocation
 implementation: it imports `lgs_switch_mcp` (the previous
 `netmiko_mcp_linksys` import still works as a deprecated alias). Prefer the
 `uvx --from ... lgs-switch-mcp` entry above. If you must keep the old
-command, add `--with git+https://github.com/WackEarl/netmiko-mcp-linksys`
-(or `@v0.3.2` for the last release under the previous name) so the package
-is installed in that environment.
+command, add `--with git+https://github.com/WackEarl/lgs-switch-mcp@v0.4.0`
+so the package is installed in that environment.
 
 ## Environment variables
 
@@ -113,11 +112,9 @@ until the community-create syntax has been confirmed live; only then set it to `
 hub env (shown below as the value to use after that confirmation). Fill `SWITCH_PROTECTED_PORTS` after the first read test —
 until it is set to a valid list, disable and PoE-off are refused.
 
-The snippet below is the current production pin (`@v0.3.2` and the previous
-command name). After the next release, change the last argument to
-`lgs-switch-mcp` (the old command remains a deprecated alias). The GitHub
-repository path stays `WackEarl/netmiko-mcp-linksys` until that repo is
-renamed.
+The snippet below is the current production pin (`@v0.4.0` and the new
+command name). The previous command `netmiko-mcp-linksys` remains a
+deprecated alias.
 
 ```json
 {
@@ -125,8 +122,8 @@ renamed.
     "command": "uvx",
     "args": [
       "--python", "3.12",
-      "--from", "git+https://github.com/WackEarl/netmiko-mcp-linksys@v0.3.2",
-      "netmiko-mcp-linksys"
+      "--from", "git+https://github.com/WackEarl/lgs-switch-mcp@v0.4.0",
+      "lgs-switch-mcp"
     ],
     "env": {
       "SWITCH_HOST": "192.0.2.10",
@@ -371,7 +368,7 @@ therefore:
    answered and runs into the timeout; `save_config` then reports that
    whether startup-config was written is unknown. `show` and read-backs
    never answer a confirmation. The real LGS328PC save prompt is **not
-   live-confirmed** ([#4](https://github.com/WackEarl/netmiko-mcp-linksys/issues/4)).
+   live-confirmed** ([#4](https://github.com/WackEarl/lgs-switch-mcp/issues/4)).
 
 ## SNMP tools
 
@@ -887,7 +884,7 @@ Still to confirm with 0.1.2:
 - Whether `set cli pagination off` in config mode is accepted.
 - The other interface tools (`shutdown`, `power inline …`) and the output of
   `save`, including whether it asks for a confirmation and its exact text
-  ([#4](https://github.com/WackEarl/netmiko-mcp-linksys/issues/4)).
+  ([#4](https://github.com/WackEarl/lgs-switch-mcp/issues/4)).
 - Hub `unlock` behaviour for `save_config`.
 
 ## Credits

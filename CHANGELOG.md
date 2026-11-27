@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-27
 
 ### Changed
 
@@ -13,8 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from `netmiko-mcp-linksys` / `netmiko_mcp_linksys` to `lgs-switch-mcp` /
   `lgs_switch_mcp`. The previous console script and import path remain as
   deprecated aliases so existing hub entries keep working. `SWITCH_*`
-  environment variables are unchanged. The GitHub repository name is
-  unchanged in this release.
+  environment variables are unchanged.
+- Renamed the GitHub repository to
+  [WackEarl/lgs-switch-mcp](https://github.com/WackEarl/lgs-switch-mcp).
+  The previous path redirects.
+
+### Added
+
+- GitHub Actions CI for pytest on Python 3.12, 3.13, and 3.14 (in #16).
+- README credits and a NOTICE file for netmiko (MIT, Kirk Byers) and
+  netmiko-mcp (Apache License 2.0, Kirk Byers) (in #17).
 
 ## [0.3.2] - 2026-11-27
 
@@ -199,12 +207,12 @@ Not live-tested yet; see "Live test 0.3.0" in the README.
   `redact_show_output`, and omit that line entirely for sensitive SNMP show
   commands (`show snmp community|viewtree|user` and abbreviated forms such
   as `sh snmp comm`) so a foreign community cannot leak to the MCP client
-  ([#5](https://github.com/WackEarl/netmiko-mcp-linksys/issues/5)).
+  ([#5](https://github.com/WackEarl/lgs-switch-mcp/issues/5)).
 - `_is_snmp_sensitive_show` and `redact_show_output` recognize those
   abbreviated forms with the same whitespace normalization as the show-tool
   command filter and prefix matching on `show` and the kind word, so the
   session log stays off and community listings stay masked
-  ([#5](https://github.com/WackEarl/netmiko-mcp-linksys/issues/5)).
+  ([#5](https://github.com/WackEarl/lgs-switch-mcp/issues/5)).
 - `save_config` no longer waits silently on a Y/N confirmation. If the
   last visible line after `save` ends in `(y/n)`, `[Y/N]`, or `(yes/no)`
   (optionally followed by `:` or `?`), it answers `y` once. A second
@@ -215,7 +223,7 @@ Not live-tested yet; see "Live test 0.3.0" in the README.
   `show` and read-backs never answer a confirmation. The LGS328PC save
   prompt text is not live-confirmed; keep `save_config` gated in the hub
   until it is
-  ([#4](https://github.com/WackEarl/netmiko-mcp-linksys/issues/4)).
+  ([#4](https://github.com/WackEarl/lgs-switch-mcp/issues/4)).
 
 ### Changed
 
@@ -225,7 +233,7 @@ Not live-tested yet; see "Live test 0.3.0" in the README.
   `connection.py`, which still re-exports the previous public names.
   The old `ConnectionError` name remains as an alias. MCP tool names,
   parameters, and return values are unchanged
-  ([#6](https://github.com/WackEarl/netmiko-mcp-linksys/issues/6)).
+  ([#6](https://github.com/WackEarl/lgs-switch-mcp/issues/6)).
 - `port_overview` runs its four allow-listed show commands in a single SSH
   session (same process-wide lock, same command filter, no config sent)
   instead of opening one session per command. If a command fails inside
@@ -233,7 +241,7 @@ Not live-tested yet; see "Live test 0.3.0" in the README.
   unknown) and are listed under `errors` as not run; output collected
   before the failure is still returned. A connect failure is reported once
   per command after a single connection attempt
-  ([#5](https://github.com/WackEarl/netmiko-mcp-linksys/issues/5)).
+  ([#5](https://github.com/WackEarl/lgs-switch-mcp/issues/5)).
 
 ## [0.2.0] - 2026-11-13
 
@@ -246,7 +254,7 @@ Not live-tested yet; see "Live test 0.3.0" in the README.
   only `noAuthUser`. POWER-ETHERNET-MIB (`1.3.6.1.2.1.105`) is an
   allow-listed read-view subtree so HA can read PoE. Command templates live in `snmp_cli.py`
   and follow the Linksys LGSXXX CLI manual
-  ([#7](https://github.com/WackEarl/netmiko-mcp-linksys/issues/7)).
+  ([#7](https://github.com/WackEarl/lgs-switch-mcp/issues/7)).
   The write-view create syntax and the viewtree read-back were
   live-confirmed on 2026-11-13; community create/remove syntax and the
   SNMP read/write path through an external client are not.
@@ -364,8 +372,8 @@ Not live-verified in that check:
 ## [0.1.3] - 2026-11-13
 
 Fixes from the architecture review and the remaining nits from the
-0.1.2 live retest, tracked in [#2](https://github.com/WackEarl/netmiko-mcp-linksys/issues/2)
-and [#3](https://github.com/WackEarl/netmiko-mcp-linksys/issues/3).
+0.1.2 live retest, tracked in [#2](https://github.com/WackEarl/lgs-switch-mcp/issues/2)
+and [#3](https://github.com/WackEarl/lgs-switch-mcp/issues/3).
 
 ### Fixed
 
@@ -380,7 +388,7 @@ and [#3](https://github.com/WackEarl/netmiko-mcp-linksys/issues/3).
   not reported as rejected, including an unquoted echo
   (`description Error LED`); a separate line like
   `Error: port is protected` is
-  ([#3](https://github.com/WackEarl/netmiko-mcp-linksys/issues/3)).
+  ([#3](https://github.com/WackEarl/lgs-switch-mcp/issues/3)).
 - `port_set_description` now reads back via `show interfaces description`
   and parses the row for the port (the previous
   `show interfaces gigabitethernet 0/N` read-back does not show
@@ -397,10 +405,10 @@ and [#3](https://github.com/WackEarl/netmiko-mcp-linksys/issues/3).
   A missing row is `could not verify (port row not found)` plus a short
   preview, never a mismatch. Leading or trailing spaces in the
   description are rejected
-  ([#2](https://github.com/WackEarl/netmiko-mcp-linksys/issues/2)).
+  ([#2](https://github.com/WackEarl/lgs-switch-mcp/issues/2)).
 - Blank lines immediately before a page break (as well as after it) are
   dropped, so the two leftover blank lines seen at page breaks in the
-  v0.1.2 live retest are removed ([#2](https://github.com/WackEarl/netmiko-mcp-linksys/issues/2)).
+  v0.1.2 live retest are removed ([#2](https://github.com/WackEarl/lgs-switch-mcp/issues/2)).
 - `examples/commands.yml` lists `show interfaces description` (already
   covered by `show interfaces *`).
 
@@ -411,7 +419,7 @@ and [#3](https://github.com/WackEarl/netmiko-mcp-linksys/issues/3).
 ## [0.1.2] - 2026-11-12
 
 Fixes from the 0.1.1 live retest on the LGS328PC (firmware 1.01.02.02),
-tracked in [#1](https://github.com/WackEarl/netmiko-mcp-linksys/issues/1).
+tracked in [#1](https://github.com/WackEarl/lgs-switch-mcp/issues/1).
 
 ### Fixed
 

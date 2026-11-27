@@ -1,6 +1,6 @@
 [project]
 name = "lgs-switch-mcp"
-version = "0.3.2"
+version = "0.4.0"
 description = "stdio MCP wrapper based on netmiko and netmiko-mcp for Linksys LGS-series switches"
 readme = "README.md"
 license = "MIT"
@@ -12,6 +12,11 @@ dependencies = [
     "netmiko-mcp==0.3.0",
     "mcp==2.3.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/WackEarl/lgs-switch-mcp"
+Repository = "https://github.com/WackEarl/lgs-switch-mcp"
+Issues = "https://github.com/WackEarl/lgs-switch-mcp/issues"
 
 [project.scripts]
 lgs-switch-mcp = "lgs_switch_mcp.server:main"
